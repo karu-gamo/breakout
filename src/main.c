@@ -15,15 +15,27 @@
 /* Heights from the reference image, in the 960 x 720 logical canvas. */
 #define PREVIEW_START_Y 290.0f
 #define PREVIEW_FULL_Y 425.0f
-#define PREVIEW_SEGMENTS 5
+#define PREVIEW_SEGMENTS 10
+#define MAX_PARTICLES 768
+#define CHARGE_SECONDS 1.0f
 #define PREVIEW_SAMPLES (PREVIEW_SEGMENTS + 1)
 #define PREVIEW_END_Y (PADDLE_Y - RADIUS)
 
 typedef enum { TITLE, PLAYING, CLEAR, GAME_OVER } Screen;
 typedef struct {
+    float x, y, vx, vy, life, lifetime, size;
+    Uint8 red, green, blue;
+} Particle;
+
+typedef struct {
     Screen screen;
     float paddle, x, y, vx, vy;
     bool attached;
+    bool left_down;
+    float charge, shot_power, attach_offset, launch_ratio, shake_time;
+    int pierces;
+    Uint32 random_state;
+    Particle particles[MAX_PARTICLES];
     bool preview_active;
     float preview_x, preview_vx, preview_vy;
     bool bricks[ROWS][COLS];
@@ -41,6 +53,10 @@ static float speed(const Game *g) {
 static void reset_ball(Game *g) {
     g->attached = true;
     g->preview_active = false;
+    g->charge = g->shot_power = 0;
+    g->pierces = 0;
+    g->attach_offset = 0;
+    g->launch_ratio = 0.35f;
     g->x = g->paddle;
     g->y = PADDLE_Y - RADIUS - 1;
     g->vx = speed(g) * 0.35f;
@@ -53,6 +69,7 @@ static SDL_FRect brick_rect(int row, int col) {
 
 static void load_stage(Game *g) {
     g->remaining = 0;
+    SDL_memset(g->particles, 0, sizeof(g->particles));
     for (int r = 0; r < ROWS; ++r) {
         for (int c = 0; c < COLS; ++c) {
             /* Three simple layouts repeat as the ball gradually gets faster. */
@@ -75,7 +92,7 @@ static void click(Game *g) {
         load_stage(g);
         g->screen = PLAYING;
         break;
-    case PLAYING: g->attached = false; break;
+    case PLAYING: g->left_down = true; break;
     case CLEAR:
         ++g->stage;
         load_stage(g);
@@ -85,10 +102,66 @@ static void click(Game *g) {
     }
 }
 
+static void release_ball(Game *g) {
+    g->left_down = false;
+    if (g->screen != PLAYING || !g->attached) return;
+    g->shot_power = g->charge;
+    g->pierces = (int)floorf(g->charge * 5.0f + 0.0001f);
+    float launch_speed = speed(g) * (1.0f + 4.0f * g->charge);
+    g->vx = launch_speed * g->launch_ratio;
+    g->vy = -sqrtf(launch_speed * launch_speed - g->vx * g->vx);
+    g->attached = false;
+    g->charge = 0;
+}
+
+static float random_unit(Game *g) {
+    if (g->random_state == 0) g->random_state = 1234567;
+    g->random_state = g->random_state * 1664525u + 1013904223u;
+    return (float)(g->random_state >> 8) / 16777216.0f;
+}
+
+static void shatter(Game *g, int row, int col) {
+    SDL_FRect b = brick_rect(row, col);
+    int slot = 0;
+    for (int i = 0; i < 24; ++i) {
+        while (slot < MAX_PARTICLES && g->particles[slot].life > 0) ++slot;
+        if (slot == MAX_PARTICLES) return;
+        float x = b.x + ((i % 8) + 0.5f) * b.w / 8;
+        float y = b.y + ((i / 8) + 0.5f) * b.h / 3;
+        float lifetime = 0.55f + random_unit(g) * 0.5f;
+        Particle p = {0};
+        p.x = x; p.y = y;
+        p.vx = (x - b.x - b.w / 2) * 7 + (random_unit(g) - 0.5f) * 180 + g->vx * 0.15f;
+        p.vy = -100 - random_unit(g) * 230 + g->vy * 0.12f;
+        p.life = p.lifetime = lifetime;
+        p.size = 3 + random_unit(g) * 5;
+        p.red = (Uint8)(245 - row * 25);
+        p.green = (Uint8)(100 + row * 25);
+        p.blue = (Uint8)(100 + row * 30);
+        g->particles[slot++] = p;
+    }
+}
+
+static void update_particles(Game *g, float dt) {
+    for (int i = 0; i < MAX_PARTICLES; ++i) {
+        Particle *p = &g->particles[i];
+        if (p->life <= 0) continue;
+        p->life -= dt;
+        p->x += p->vx * dt;
+        p->y += p->vy * dt;
+        p->vy += 600 * dt;
+    }
+}
+
 static void update(Game *g, float dt) {
+    update_particles(g, dt);
     if (g->screen != PLAYING) return;
     if (g->attached) {
-        g->x = g->paddle;
+        g->x = g->paddle + g->attach_offset;
+        if (g->left_down) {
+            g->charge = clamp(g->charge + dt / CHARGE_SECONDS, 0, 1);
+            g->shake_time += dt;
+        }
         return;
     }
     float old_x = g->x, old_y = g->y;
@@ -111,10 +184,13 @@ static void update(Game *g, float dt) {
         float t = (PADDLE_Y - RADIUS - old_y) / (g->y - old_y);
         float hit_x = old_x + (g->x - old_x) * t;
         if (fabsf(hit_x - g->paddle) <= PADDLE_W / 2 + RADIUS) {
-            float offset = clamp((hit_x - g->paddle) / (PADDLE_W / 2), -1, 1);
-            g->vx = speed(g) * offset * 0.85f;
-            g->vy = -sqrtf(speed(g) * speed(g) - g->vx * g->vx);
-            g->y = PADDLE_Y - RADIUS;
+            reset_ball(g);
+            g->attach_offset = clamp(hit_x - g->paddle, -PADDLE_W / 2 + RADIUS,
+                                     PADDLE_W / 2 - RADIUS);
+            g->launch_ratio = clamp(g->attach_offset / (PADDLE_W / 2), -1, 1) * 0.85f;
+            if (fabsf(g->launch_ratio) < 0.15f) g->launch_ratio = 0.35f;
+            g->x = g->paddle + g->attach_offset;
+            return;
         }
     }
     for (int r = 0; r < ROWS; ++r) {
@@ -128,6 +204,16 @@ static void update(Game *g, float dt) {
             g->bricks[r][c] = false;
             g->score += 100;
             --g->remaining;
+            if (g->shot_power > 0) shatter(g, r, c);
+            if (g->remaining == 0) {
+                g->screen = CLEAR;
+                g->left_down = false;
+                return;
+            }
+            if (g->pierces > 0) {
+                --g->pierces;
+                continue;
+            }
             if (old_y + RADIUS <= b.y) {
                 g->y = b.y - RADIUS; g->vy = -fabsf(g->vy);
             } else if (old_y - RADIUS >= b.y + b.h) {
@@ -137,13 +223,14 @@ static void update(Game *g, float dt) {
             } else {
                 g->x = b.x + b.w + RADIUS; g->vx = fabsf(g->vx);
             }
-            if (g->remaining == 0) g->screen = CLEAR;
             return;
         }
     }
     if (g->y - RADIUS > HEIGHT) {
-        if (--g->lives == 0) g->screen = GAME_OVER;
-        else reset_ball(g);
+        if (--g->lives == 0) {
+            g->screen = GAME_OVER;
+            g->left_down = false;
+        } else reset_ball(g);
     }
 }
 
@@ -222,7 +309,7 @@ static void render(SDL_Renderer *r, const Game *g) {
         centered(r, 230, "BREAKOUT", 5);
         centered(r, 330, "CLICK TO START", 2);
         centered(r, 395, "MOVE MOUSE TO CONTROL THE PADDLE", 2);
-        centered(r, 430, "CLICK TO LAUNCH / 3 LIVES", 2);
+        centered(r, 430, "HOLD LEFT BUTTON TO CHARGE / RELEASE TO FIRE", 2);
         centered(r, 560, "ESC: QUIT", 1.5f);
     } else {
         char hud[128];
@@ -241,12 +328,36 @@ static void render(SDL_Renderer *r, const Game *g) {
             }
         }
         render_prediction(r, g);
-        color(r, 90, 220, 235);
-        SDL_FRect paddle = {g->paddle - PADDLE_W / 2, PADDLE_Y, PADDLE_W, 15};
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        for (int i = 0; i < MAX_PARTICLES; ++i) {
+            const Particle *p = &g->particles[i];
+            if (p->life <= 0) continue;
+            SDL_SetRenderDrawColor(r, p->red, p->green, p->blue,
+                (Uint8)(255 * clamp(p->life / p->lifetime, 0, 1)));
+            SDL_FRect shard = {p->x, p->y, p->size, p->size};
+            SDL_RenderFillRect(r, &shard);
+        }
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+        float shake_x = 0, shake_y = 0;
+        if (g->attached && g->left_down && g->charge > 0) {
+            shake_x = sinf(g->shake_time * 105) * 4 * g->charge;
+            shake_y = sinf(g->shake_time * 137) * 2 * g->charge;
+        }
+        color(r, (Uint8)(90 + 165 * g->charge),
+                 (Uint8)(220 - 170 * g->charge), (Uint8)(235 - 185 * g->charge));
+        SDL_FRect paddle = {g->paddle - PADDLE_W / 2 + shake_x,
+                            PADDLE_Y + shake_y, PADDLE_W, 15};
         SDL_RenderFillRect(r, &paddle);
-        color(r, 250, 250, 245);
-        draw_ball(r, g->x, g->y);
-        if (g->screen == PLAYING && g->attached) centered(r, 540, "CLICK TO LAUNCH", 2);
+        if (g->shot_power > 0) color(r, 255, 200, 100);
+        else color(r, 250, 250, 245);
+        draw_ball(r, g->x + (g->attached ? shake_x : 0),
+                  g->y + (g->attached ? shake_y : 0));
+        if (g->screen == PLAYING && g->attached) {
+            char charge_text[96];
+            SDL_snprintf(charge_text, sizeof(charge_text), "POWER %d%% / HOLD LEFT - RELEASE TO FIRE",
+                         (int)SDL_roundf(g->charge * 100));
+            centered(r, 540, charge_text, 2);
+        }
         if (g->screen == CLEAR || g->screen == GAME_OVER) {
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(r, 8, 12, 24, 230);
@@ -287,7 +398,11 @@ int main(int argc, char **argv) {
             SDL_ConvertEventToRenderCoordinates(renderer, &event);
             if (event.type == SDL_EVENT_QUIT) running = false;
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) running = false;
-            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) focused = false;
+            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+                focused = false;
+                game.left_down = false;
+                game.charge = 0;
+            }
             if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) focused = true;
             if (event.type == SDL_EVENT_MOUSE_MOTION)
                 game.paddle = clamp(event.motion.x, PADDLE_W / 2, WIDTH - PADDLE_W / 2);
@@ -295,6 +410,8 @@ int main(int argc, char **argv) {
                 game.paddle = clamp(event.button.x, PADDLE_W / 2, WIDTH - PADDLE_W / 2);
                 click(&game);
             }
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT &&
+                game.left_down) release_ball(&game);
         }
         Uint64 now = SDL_GetPerformanceCounter();
         double elapsed = (double)(now - last) / (double)SDL_GetPerformanceFrequency();
