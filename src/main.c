@@ -221,7 +221,7 @@ static SDL_Color generated_row_color(int level, int row_number) {
 
 static int split_interval(int level) {
     int increase = level > 1 ? (level - 1) / 4 : 0;
-    int maximum_increase = 60 - BONUS_BRICK_INTERVAL;
+    int maximum_increase = 50 - BONUS_BRICK_INTERVAL;
     return BONUS_BRICK_INTERVAL + (increase < maximum_increase ? increase : maximum_increase);
 }
 

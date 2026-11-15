@@ -383,7 +383,7 @@ static void test_strong_bricks(void) {
     assert(strong_interval(14) == 60 && strong_interval(15) == 59);
     assert(strong_interval(205) == 21 && strong_interval(210) == 20 && strong_interval(500) == 20);
     assert(split_interval(1) == 40 && split_interval(4) == 40 && split_interval(5) == 41);
-    assert(split_interval(9) == 42 && split_interval(80) == 59 && split_interval(81) == 60 && split_interval(500) == 60);
+    assert(split_interval(9) == 42 && split_interval(40) == 49 && split_interval(41) == 50 && split_interval(500) == 50);
     const int levels[] = {1, 9, 10, 15, 60, 160};
     for (int index = 0; index < (int)SDL_arraysize(levels); ++index) {
         Game g = start(123); g.level = levels[index]; init_field(&g);
