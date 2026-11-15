@@ -218,7 +218,9 @@ static void test_speed_width(void) {
     for (int i = 0; i < 240; ++i) update(&g, (float)STEP);
     assert(fabsf(g.paddle_width - PADDLE_W) < 0.01f);
     g.paddle = 0; update(&g, (float)STEP);
-    assert(g.paddle >= g.paddle_width / 2);
+    assert(g.paddle == 0 && g.paddle - g.paddle_width / 2 < 0);
+    g.paddle = WIDTH; update(&g, (float)STEP);
+    assert(g.paddle == WIDTH && g.paddle + g.paddle_width / 2 > WIDTH);
     empty_stage(&g);
     g.paddle = 480; g.paddle_width = 360; reset_history(&g);
     g.paddle_width = 360;

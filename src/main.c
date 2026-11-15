@@ -118,7 +118,6 @@ static void record_paddle(Game *g) {
     g->paddle_speed += (fabsf(movement) / (float)STEP - g->paddle_speed) * smoothing;
     g->paddle_width = PADDLE_W * (1 + (MAX_PADDLE_SCALE - 1) *
         clamp(g->paddle_speed / TRAIL_FAST_SPEED, 0, 1));
-    g->paddle = clamp(g->paddle, g->paddle_width / 2, WIDTH - g->paddle_width / 2);
     for (int i = PADDLE_HISTORY - 1; i > 0; --i) {
         g->paddle_history[i] = g->paddle_history[i - 1];
         g->width_history[i] = g->width_history[i - 1];
