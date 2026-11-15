@@ -52,6 +52,10 @@ static void test_release_and_gravity(void) {
     g.balls[1].x = 400; g.balls[1].y = 400;
     update_ball(&g, &g.balls[1], (float)STEP);
     assert(fabsf(g.balls[1].vy - before - BONUS_GRAVITY * (float)STEP) < 0.001f);
+    assert(BONUS_GRAVITY == 930 && BONUS_MAX_FALL_SPEED == 3600);
+    Ball falling = {.active = true, .gravity = true, .x = 400, .y = 400, .vy = 3599};
+    update_ball(&g, &falling, (float)STEP);
+    assert(falling.vy == BONUS_MAX_FALL_SPEED);
 
     Game slow = start(123), fast = start(123);
     Ball impact = {.active = true, .vx = 100, .vy = -300};

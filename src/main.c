@@ -26,7 +26,8 @@
 #define PREVIEW_SEGMENTS 10
 #define MAX_PARTICLES 768
 #define MAX_BALLS 64
-#define BONUS_GRAVITY 620.0f
+#define BONUS_GRAVITY 930.0f
+#define BONUS_MAX_FALL_SPEED 3600.0f
 #define CHARGE_SECONDS 1.0f
 #define TRAIL_SECONDS 0.2f
 #define MAX_TRAILS 12
@@ -397,7 +398,7 @@ static void update_ball(Game *g, Ball *b, float dt) {
         return;
     }
     if (update_soft_bounce(b, dt)) return;
-    if (b->gravity) b->vy = fminf(b->vy + BONUS_GRAVITY * dt, 1800);
+    if (b->gravity) b->vy = fminf(b->vy + BONUS_GRAVITY * dt, BONUS_MAX_FALL_SPEED);
     float old_x = b->x, old_y = b->y;
     if (b->vy <= 0) b->preview_active = false;
     if (!b->preview_active && b->vy > 0 && old_y <= PREVIEW_START_Y &&
