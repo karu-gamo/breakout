@@ -28,6 +28,7 @@
 #define MAX_BALLS 64
 #define BONUS_GRAVITY 930.0f
 #define BONUS_MAX_FALL_SPEED 3600.0f
+#define BONUS_RESTITUTION 1.8f
 #define CHARGE_SECONDS 1.0f
 #define TRAIL_SECONDS 0.2f
 #define MAX_TRAILS 12
@@ -490,7 +491,7 @@ static void update_ball(Game *g, Ball *b, float dt) {
                 b->x = normal_x < 0 ? rect.x - RADIUS : rect.x + rect.w + RADIUS;
             }
             float dot = b->vx * normal_x + b->vy * normal_y;
-            float restitution = b->gravity ? 0.72f : 1.0f;
+            float restitution = b->gravity ? BONUS_RESTITUTION : 1.0f;
             begin_soft_bounce(b, normal_x, normal_y,
                 (b->vx - 2 * dot * normal_x) * restitution,
                 (b->vy - 2 * dot * normal_y) * restitution);

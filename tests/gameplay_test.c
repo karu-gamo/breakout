@@ -72,7 +72,8 @@ static void test_release_and_gravity(void) {
         Ball b = {.active = true, .gravity = true, .x = 70, .y = 124, .vy = i ? 1000 : 500};
         update_ball(&g, &b, (float)STEP);
         assert(!g.bricks[1][0] && b.bounce_pending && b.vy > 0);
-        for (int step = 0; step < 20; ++step) update_ball(&g, &b, (float)STEP);
+        assert(fabsf(b.bounce_vy + b.vy * 1.8f) < 0.001f);
+        for (int step = 0; step < 20 && b.bounce_pending; ++step) update_ball(&g, &b, (float)STEP);
         assert(!b.bounce_pending && b.vy < 0);
         recoil[i] = fabsf(b.vy);
     }
