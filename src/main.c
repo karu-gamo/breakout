@@ -22,7 +22,7 @@
 #define TRAIL_FAST_SPEED 1200.0f
 #define MISS_DURATION 0.85f
 #define DEG_TO_RAD (0.017453292519943295f)
-#define MAX_TILT (20.0f * DEG_TO_RAD)
+#define MAX_TILT (40.0f * DEG_TO_RAD)
 #define PREVIEW_SAMPLES (PREVIEW_SEGMENTS + 1)
 #define PREVIEW_END_Y (PADDLE_Y - RADIUS)
 
@@ -73,7 +73,7 @@ static void reset_history(Game *g) {
 
 static void record_paddle(Game *g) {
     float movement = g->paddle - g->paddle_history[0];
-    if (g->right_down)
+    if (g->right_down && movement != 0)
         g->paddle_angle = clamp(g->paddle_angle + movement * 0.15f * DEG_TO_RAD,
                                 -MAX_TILT, MAX_TILT);
     else {
@@ -469,7 +469,7 @@ static void render(SDL_Renderer *r, const Game *g) {
         centered(r, 330, "CLICK TO START", 2);
         centered(r, 395, "MOVE MOUSE TO CONTROL THE PADDLE", 2);
         centered(r, 430, "HOLD LEFT BUTTON TO CHARGE / RELEASE TO FIRE", 2);
-        centered(r, 485, "HOLD RIGHT + MOVE TO AIM (+/-20 DEG)", 2);
+        centered(r, 485, "HOLD RIGHT + MOVE TO AIM (+/-40 DEG)", 2);
         centered(r, 560, "ESC: QUIT", 1.5f);
     } else {
         char hud[128];
