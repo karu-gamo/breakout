@@ -147,7 +147,7 @@ static void test_soft_bounce(void) {
         update_ball(&g, &b, (float)STEP);
         assert(b.bounce_pending && b.deforming);
         float x = b.x, y = b.y, vx = b.vx, vy = b.vy;
-        for (int step = 0; step < 8; ++step) update_ball(&g, &b, (float)STEP);
+        for (int step = 0; step < 3; ++step) update_ball(&g, &b, (float)STEP);
         assert(b.bounce_pending && b.x == x && b.y == y && b.vx == vx && b.vy == vy);
         assert(squash_amount(&b) > 0.5f);
         for (int step = 0; step < 9; ++step) update_ball(&g, &b, (float)STEP);
@@ -162,7 +162,7 @@ static void test_soft_bounce(void) {
     Ball b = {.active = true, .x = 70, .y = 100 - RADIUS, .vy = 400};
     update_ball(&g, &b, (float)STEP);
     assert(b.bounce_pending && b.vy == 400 && !g.bricks[0][0] && g.score == 100);
-    for (int i = 0; i < 20; ++i) update_ball(&g, &b, (float)STEP);
+    for (int i = 0; i < 10; ++i) update_ball(&g, &b, (float)STEP);
     assert(b.vy == -400 && g.score == 100);
     empty_stage(&g);
     g.bricks[0][0] = true; ++g.remaining;
@@ -186,6 +186,23 @@ static void test_spin(void) {
     float rotation = fast.rotation;
     update_spin(&fast, 1);
     assert(fast.rotation == rotation);
+}
+
+static void test_paddle_spin(void) {
+    Game g = start(123);
+    for (int i = 0; i < 3; ++i) {
+        reset_ball(&g, &g.balls[i]);
+        g.balls[i].base_launch_angle = bounce_offset_angle(i * 24);
+    }
+    release_ball(&g);
+    assert(g.balls[0].spin_speed == 0 && g.balls[0].spin_left == 0);
+    assert(g.balls[2].spin_speed > g.balls[1].spin_speed && g.balls[1].spin_speed > 0);
+    Ball left = g.balls[2];
+    start_paddle_spin(&left, -g.balls[2].base_launch_angle);
+    assert(fabsf(left.spin_speed + g.balls[2].spin_speed) < 0.001f);
+    update_spin(&left, 1);
+    assert(left.spin_speed == 0);
+    assert(SOFT_COMPRESS_SECONDS == 0.0325f);
 }
 
 static void test_render(void) {
@@ -248,6 +265,7 @@ int main(void) {
     test_trails_and_prediction();
     test_soft_bounce();
     test_spin();
+    test_paddle_spin();
     test_render();
     puts("PASS: random bonus placement, three-ball release, impulse/gravity/recoil, multicatch, shared charge, per-ball launch/guide, last-ball loss, trails and prediction");
     return 0;

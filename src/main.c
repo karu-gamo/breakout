@@ -15,7 +15,7 @@
 #define COLS 10
 #define ROWS 5
 #define RADIUS 16.0f
-#define SOFT_COMPRESS_SECONDS 0.065f
+#define SOFT_COMPRESS_SECONDS 0.0325f
 #define SOFT_RECOVER_SECONDS 0.12f
 #define PADDLE_Y 650.0f
 #define PADDLE_W 120.0f
@@ -249,6 +249,12 @@ static int ball_count(const Game *g) {
     return count;
 }
 
+static void start_paddle_spin(Ball *b, float offset_angle) {
+    /* The signed contact angle grows toward either edge of the paddle. */
+    b->spin_speed = hypotf(b->vx, b->vy) * 0.024f * (offset_angle / 0.8f);
+    b->spin_left = fabsf(b->spin_speed) > 0.0001f ? 1.0f : 0;
+}
+
 static void release_ball(Game *g) {
     g->left_down = false;
     if (g->screen != PLAYING || g->miss_time > 0) return;
@@ -261,6 +267,7 @@ static void release_ball(Game *g) {
         place_attached_ball(g, b);
         b->vx = launch_speed * sinf(launch_angle(g, b));
         b->vy = -launch_speed * cosf(launch_angle(g, b));
+        start_paddle_spin(b, b->base_launch_angle);
         b->attached = false;
         b->gravity = false;
     }
@@ -438,6 +445,7 @@ static void update_ball(Game *g, Ball *b, float dt) {
         float bounce_angle = angle + bounce_offset_angle(hit_offset);
         b->vx = magnitude * sinf(bounce_angle);
         b->vy = -magnitude * cosf(bounce_angle);
+        start_paddle_spin(b, bounce_offset_angle(hit_offset));
         float c = cosf(angle), n = sinf(angle);
         b->x = trails[i] + hit_offset * c + (RADIUS + 8.5f) * n;
         b->y = PADDLE_Y + 7.5f + hit_offset * n - (RADIUS + 8.5f) * c;
@@ -577,7 +585,7 @@ static void draw_ball(SDL_Renderer *r, SDL_Texture *texture, float x, float y, f
     if (!texture) { draw_disc(r, x, y, radius); return; }
     Uint8 red, green, blue, alpha;
     SDL_GetRenderDrawColor(r, &red, &green, &blue, &alpha);
-    SDL_SetTextureColorMod(texture, red, green, blue);
+    SDL_SetTextureColorMod(texture, 255, 255, 255);
     SDL_SetTextureAlphaMod(texture, alpha);
     SDL_FRect dest = {x - radius, y - radius, radius * 2, radius * 2};
     SDL_RenderTexture(r, texture, NULL, &dest);
@@ -594,7 +602,7 @@ static void draw_soft_ball(SDL_Renderer *r, SDL_Texture *texture, const Ball *b,
     y -= ny * RADIUS * (1 - normal_scale);
     Uint8 red, green, blue, alpha;
     SDL_GetRenderDrawColor(r, &red, &green, &blue, &alpha);
-    SDL_FColor tint = {red / 255.0f, green / 255.0f, blue / 255.0f, alpha / 255.0f};
+    SDL_FColor tint = {1, 1, 1, alpha / 255.0f};
     SDL_SetTextureColorMod(texture, 255, 255, 255);
     SDL_SetTextureAlphaMod(texture, 255);
     SDL_Vertex vertices[4];
@@ -758,9 +766,7 @@ static void render(SDL_Renderer *r, const Game *g) {
                 const Ball *b = &g->balls[i];
                 if (!b->active) continue;
                 render_launch_guide(r, g, b);
-                if (b->gravity) color(r, 255, 235, 130);
-                else if (b->shot_power > 0) color(r, 255, 200, 100);
-                else color(r, 255, 255, 255);
+                color(r, 255, 255, 255);
                 draw_soft_ball(r, g->ball_texture, b, b->x + (b->attached ? shake_x : 0),
                           b->y + (b->attached ? shake_y : 0));
             }
