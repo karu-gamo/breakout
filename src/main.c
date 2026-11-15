@@ -399,7 +399,7 @@ static void render(SDL_Renderer *r, const Game *g) {
     SDL_RenderClear(r);
     color(r, 226, 236, 250);
     if (g->screen == TITLE) {
-        centered(r, 230, "BREAKOUT", 5);
+        centered(r, 230, "BreakBout", 5);
         centered(r, 330, "CLICK TO START", 2);
         centered(r, 395, "MOVE MOUSE TO CONTROL THE PADDLE", 2);
         centered(r, 430, "HOLD LEFT BUTTON TO CHARGE / RELEASE TO FIRE", 2);
@@ -481,14 +481,14 @@ static void render(SDL_Renderer *r, const Game *g) {
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     if (!SDL_Init(SDL_INIT_VIDEO)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Breakout", SDL_GetError(), NULL);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "BreakBout", SDL_GetError(), NULL);
         return 1;
     }
     SDL_Window *window = NULL;
     SDL_Renderer *renderer = NULL;
-    if (!SDL_CreateWindowAndRenderer("Breakout", WIDTH, HEIGHT, SDL_WINDOW_RESIZABLE,
+    if (!SDL_CreateWindowAndRenderer("BreakBout", WIDTH, HEIGHT, SDL_WINDOW_RESIZABLE,
                                      &window, &renderer)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Breakout", SDL_GetError(), NULL);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "BreakBout", SDL_GetError(), NULL);
         SDL_Quit();
         return 1;
     }

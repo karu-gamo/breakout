@@ -1,4 +1,4 @@
-# Breakout
+# BreakBout
 
 SDL3 / C11 で作った、マウス操作の Windows 向けブロック崩しです。
 
