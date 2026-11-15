@@ -15,15 +15,17 @@
 /* Heights from the reference image, in the 960 x 720 logical canvas. */
 #define PREVIEW_START_Y 290.0f
 #define PREVIEW_FULL_Y 425.0f
-#define PREVIEW_SAMPLES 7
-#define PREVIEW_FRAME_SECONDS (1.0 / 60.0)
-#define PREVIEW_FRAME_STRIDE 5
+#define PREVIEW_SEGMENTS 5
+#define PREVIEW_SAMPLES (PREVIEW_SEGMENTS + 1)
+#define PREVIEW_END_Y (PADDLE_Y - RADIUS)
 
 typedef enum { TITLE, PLAYING, CLEAR, GAME_OVER } Screen;
 typedef struct {
     Screen screen;
     float paddle, x, y, vx, vy;
     bool attached;
+    bool preview_active;
+    float preview_x, preview_vx, preview_vy;
     bool bricks[ROWS][COLS];
     int stage, lives, remaining, score;
 } Game;
@@ -38,6 +40,7 @@ static float speed(const Game *g) {
 
 static void reset_ball(Game *g) {
     g->attached = true;
+    g->preview_active = false;
     g->x = g->paddle;
     g->y = PADDLE_Y - RADIUS - 1;
     g->vx = speed(g) * 0.35f;
@@ -89,6 +92,15 @@ static void update(Game *g, float dt) {
         return;
     }
     float old_x = g->x, old_y = g->y;
+    if (g->vy <= 0) g->preview_active = false;
+    if (!g->preview_active && g->vy > 0 && old_y <= PREVIEW_START_Y &&
+        old_y + g->vy * dt >= PREVIEW_START_Y) {
+        float time_to_line = (PREVIEW_START_Y - old_y) / g->vy;
+        g->preview_x = old_x + g->vx * time_to_line;
+        g->preview_vx = g->vx;
+        g->preview_vy = g->vy;
+        g->preview_active = true;
+    }
     g->x += g->vx * dt;
     g->y += g->vy * dt;
     if (g->x < RADIUS) { g->x = RADIUS; g->vx = fabsf(g->vx); }
@@ -141,7 +153,8 @@ typedef struct {
 } BallPreview;
 
 static float preview_strength(const Game *g) {
-    if (g->screen != PLAYING || g->attached || g->vy <= 0) return 0;
+    if (g->screen != PLAYING || g->attached || !g->preview_active ||
+        g->vy <= 0 || g->y > PREVIEW_END_Y) return 0;
     return clamp((g->y - PREVIEW_START_Y) /
                  (PREVIEW_FULL_Y - PREVIEW_START_Y), 0, 1);
 }
@@ -149,22 +162,23 @@ static float preview_strength(const Game *g) {
 static int predict_ball(const Game *g, BallPreview samples[PREVIEW_SAMPLES]) {
     float strength = preview_strength(g);
     if (strength <= 0) return 0;
-    /* Simulate a copy: prediction must never alter lives, bricks or score.
-       The paddle stays at its current position. Stop on bounce or loss. */
-    Game future = *g;
+    /* Freeze the trajectory at the yellow-line crossing. Fold horizontal
+       travel into the arena to include any number of side-wall reflections. */
+    const float span = WIDTH - 2 * RADIUS;
+    const float distance = PREVIEW_END_Y - PREVIEW_START_Y;
     int count = 0;
-    const int steps_per_sample = (int)(PREVIEW_FRAME_STRIDE *
-                                      PREVIEW_FRAME_SECONDS / STEP + 0.5);
-    for (int i = 0; i < PREVIEW_SAMPLES; ++i) {
-        float opacity = (float)(PREVIEW_SAMPLES - 1 - i) * 0.05f;
-        samples[count++] = (BallPreview){future.x, future.y,
+    for (int i = 0; i <= PREVIEW_SEGMENTS; ++i) {
+        float fraction = (float)i / PREVIEW_SEGMENTS;
+        float y = PREVIEW_START_Y + distance * fraction;
+        if (y <= g->y) continue; /* Never leave prediction dots behind the ball. */
+        float time = (y - PREVIEW_START_Y) / g->preview_vy;
+        float phase = fmodf(g->preview_x - RADIUS + g->preview_vx * time,
+                            2 * span);
+        if (phase < 0) phase += 2 * span;
+        float x = RADIUS + (phase <= span ? phase : 2 * span - phase);
+        float opacity = (float)(PREVIEW_SEGMENTS - i) * 0.05f;
+        samples[count++] = (BallPreview){x, y,
             (Uint8)SDL_roundf(255.0f * opacity * strength)};
-        if (i == PREVIEW_SAMPLES - 1) break;
-        for (int step = 0; step < steps_per_sample; ++step) {
-            update(&future, (float)STEP);
-            if (future.attached || future.screen != PLAYING || future.vy <= 0)
-                return count;
-        }
     }
     return count;
 }
@@ -180,8 +194,7 @@ static void render_prediction(SDL_Renderer *r, const Game *g) {
     BallPreview samples[PREVIEW_SAMPLES];
     int count = predict_ball(g, samples);
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    /* Far to near: 30 frames = 0%, 25 = 5%, ... 0 = 30% opacity.
-       The real ball is rendered solid on top of the zero-frame sample. */
+    /* Draw far to near, with opacity increasing by 5% per distance segment. */
     for (int i = count - 1; i >= 0; --i) {
         if (samples[i].alpha == 0) continue;
         SDL_SetRenderDrawColor(r, 250, 250, 245, samples[i].alpha);
