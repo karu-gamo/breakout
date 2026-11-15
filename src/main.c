@@ -8,7 +8,9 @@
 #define HEIGHT 720
 #define COLS 10
 #define ROWS 5
-#define RADIUS 8.0f
+#define RADIUS 16.0f
+#define SOFT_COMPRESS_SECONDS 0.065f
+#define SOFT_RECOVER_SECONDS 0.12f
 #define PADDLE_Y 650.0f
 #define PADDLE_W 120.0f
 #define STEP (1.0 / 240.0)
@@ -47,6 +49,8 @@ typedef struct {
     int pierces;
     bool preview_active;
     float preview_x, preview_vx, preview_vy;
+    bool deforming, bounce_pending;
+    float squash_time, normal_x, normal_y, bounce_vx, bounce_vy;
 } Ball;
 
 typedef struct {
@@ -306,12 +310,46 @@ static void break_paddle(Game *g) {
     }
 }
 
+static void begin_soft_bounce(Ball *b, float nx, float ny, float vx, float vy) {
+    float length = hypotf(nx, ny);
+    b->normal_x = nx / length;
+    b->normal_y = ny / length;
+    b->bounce_vx = vx;
+    b->bounce_vy = vy;
+    b->squash_time = 0;
+    b->deforming = b->bounce_pending = true;
+}
+
+static float squash_amount(const Ball *b) {
+    if (!b->deforming) return 0;
+    if (b->squash_time < SOFT_COMPRESS_SECONDS)
+        return sinf(b->squash_time / SOFT_COMPRESS_SECONDS * 1.57079632679f);
+    float recovery = (b->squash_time - SOFT_COMPRESS_SECONDS) / SOFT_RECOVER_SECONDS;
+    return cosf(clamp(recovery, 0, 1) * 1.57079632679f);
+}
+
+static bool update_soft_bounce(Ball *b, float dt) {
+    if (!b->deforming) return false;
+    b->squash_time += dt;
+    if (b->bounce_pending) {
+        if (b->squash_time < SOFT_COMPRESS_SECONDS) return true;
+        /* Only now, at maximum compression, reverse the physical velocity. */
+        b->vx = b->bounce_vx;
+        b->vy = b->bounce_vy;
+        b->bounce_pending = false;
+    }
+    if (b->squash_time >= SOFT_COMPRESS_SECONDS + SOFT_RECOVER_SECONDS)
+        b->deforming = false;
+    return false;
+}
+
 static void update_ball(Game *g, Ball *b, float dt) {
     if (!b->active) return;
     if (b->attached) {
         place_attached_ball(g, b);
         return;
     }
+    if (update_soft_bounce(b, dt)) return;
     if (b->gravity) b->vy = fminf(b->vy + BONUS_GRAVITY * dt, 1800);
     float old_x = b->x, old_y = b->y;
     if (b->vy <= 0) b->preview_active = false;
@@ -325,9 +363,15 @@ static void update_ball(Game *g, Ball *b, float dt) {
     }
     b->x += b->vx * dt;
     b->y += b->vy * dt;
-    if (b->x < RADIUS) { b->x = RADIUS; b->vx = fabsf(b->vx); }
-    if (b->x > WIDTH - RADIUS) { b->x = WIDTH - RADIUS; b->vx = -fabsf(b->vx); }
-    if (b->y < 60 + RADIUS) { b->y = 60 + RADIUS; b->vy = fabsf(b->vy); }
+    float wall_nx = 0, wall_ny = 0;
+    float out_vx = b->vx, out_vy = b->vy;
+    if (b->x < RADIUS) { b->x = RADIUS; wall_nx = 1; out_vx = fabsf(b->vx); }
+    if (b->x > WIDTH - RADIUS) { b->x = WIDTH - RADIUS; wall_nx = -1; out_vx = -fabsf(b->vx); }
+    if (b->y < 60 + RADIUS) { b->y = 60 + RADIUS; wall_ny = 1; out_vy = fabsf(b->vy); }
+    if (wall_nx != 0 || wall_ny != 0) {
+        begin_soft_bounce(b, wall_nx, wall_ny, out_vx, out_vy);
+        return;
+    }
     float hit_offset;
     if (hit_paddle(g->paddle, g->paddle_angle, old_x, old_y, b->x, b->y, &hit_offset)) {
         reset_ball(g, b);
@@ -378,20 +422,28 @@ static void update_ball(Game *g, Ball *b, float dt) {
                 --b->pierces;
                 continue;
             }
-            if (old_y + RADIUS <= rect.y) {
-                b->y = rect.y - RADIUS; b->vy = -fabsf(b->vy);
-            } else if (old_y - RADIUS >= rect.y + rect.h) {
-                b->y = rect.y + rect.h + RADIUS; b->vy = fabsf(b->vy);
-            } else if (old_x < rect.x) {
-                b->x = rect.x - RADIUS; b->vx = -fabsf(b->vx);
+            /* Resolve the contact first, hold and squash, then reflect. */
+            float normal_x = 0, normal_y = 0;
+            if (old_y <= rect.y && b->vy > 0) {
+                normal_y = -1; b->y = rect.y - RADIUS;
+            } else if (old_y >= rect.y + rect.h && b->vy < 0) {
+                normal_y = 1; b->y = rect.y + rect.h + RADIUS;
+            } else if (old_x <= rect.x && b->vx > 0) {
+                normal_x = -1; b->x = rect.x - RADIUS;
+            } else if (old_x >= rect.x + rect.w && b->vx < 0) {
+                normal_x = 1; b->x = rect.x + rect.w + RADIUS;
+            } else if (fabsf(b->vy) >= fabsf(b->vx)) {
+                normal_y = b->vy >= 0 ? -1 : 1;
+                b->y = normal_y < 0 ? rect.y - RADIUS : rect.y + rect.h + RADIUS;
             } else {
-                b->x = rect.x + rect.w + RADIUS; b->vx = fabsf(b->vx);
+                normal_x = b->vx >= 0 ? -1 : 1;
+                b->x = normal_x < 0 ? rect.x - RADIUS : rect.x + rect.w + RADIUS;
             }
-            if (b->gravity) {
-                /* Restitution preserves the relation between impact momentum and recoil. */
-                b->vx *= 0.72f;
-                b->vy *= 0.72f;
-            }
+            float dot = b->vx * normal_x + b->vy * normal_y;
+            float restitution = b->gravity ? 0.72f : 1.0f;
+            begin_soft_bounce(b, normal_x, normal_y,
+                (b->vx - 2 * dot * normal_x) * restitution,
+                (b->vy - 2 * dot * normal_y) * restitution);
             return;
         }
     }
@@ -476,6 +528,38 @@ static void draw_ball(SDL_Renderer *r, float x, float y) {
     draw_disc(r, x, y, RADIUS);
 }
 
+static void draw_soft_ball(SDL_Renderer *r, const Ball *b, float x, float y) {
+    float squash = squash_amount(b);
+    if (squash <= 0) {
+        draw_ball(r, x, y);
+        return;
+    }
+    const int segments = 40;
+    SDL_Vertex vertices[42];
+    int indices[120];
+    Uint8 red, green, blue, alpha;
+    SDL_GetRenderDrawColor(r, &red, &green, &blue, &alpha);
+    SDL_FColor tint = {red / 255.0f, green / 255.0f, blue / 255.0f, alpha / 255.0f};
+    float normal_radius = RADIUS * (1 - 0.55f * squash);
+    float tangent_radius = RADIUS * (1 + 0.45f * squash);
+    /* Move the visual center toward the surface so the squash stays in contact. */
+    x -= b->normal_x * (RADIUS - normal_radius);
+    y -= b->normal_y * (RADIUS - normal_radius);
+    vertices[0] = (SDL_Vertex){{x, y}, tint, {0, 0}};
+    for (int i = 0; i <= segments; ++i) {
+        float angle = (float)i / segments * 6.28318530718f;
+        float along_normal = cosf(angle) * normal_radius;
+        float along_tangent = sinf(angle) * tangent_radius;
+        vertices[i + 1] = (SDL_Vertex){
+            {x + b->normal_x * along_normal - b->normal_y * along_tangent,
+             y + b->normal_y * along_normal + b->normal_x * along_tangent}, tint, {0, 0}};
+        if (i < segments) {
+            indices[i * 3] = 0; indices[i * 3 + 1] = i + 1; indices[i * 3 + 2] = i + 2;
+        }
+    }
+    SDL_RenderGeometry(r, NULL, vertices, segments + 2, indices, segments * 3);
+}
+
 static void render_prediction(SDL_Renderer *r, const Game *g, const Ball *b) {
     BallPreview samples[PREVIEW_SAMPLES];
     int count = predict_ball(g, b, samples);
@@ -520,7 +604,7 @@ static void render_launch_guide(SDL_Renderer *r, const Game *g, const Ball *b) {
     float dx = sinf(launch_angle(g, b)), dy = -cosf(launch_angle(g, b));
     color(r, 255, 225, 130);
     for (int i = 0; i < 10; ++i) {
-        float start = 15 + i * 13.0f, end = start + 7;
+        float start = RADIUS + 7 + i * 13.0f, end = start + 7;
         SDL_RenderLine(r, b->x + dx * start, b->y + dy * start,
                           b->x + dx * end, b->y + dy * end);
     }
@@ -624,7 +708,7 @@ static void render(SDL_Renderer *r, const Game *g) {
                 if (b->gravity) color(r, 255, 235, 130);
                 else if (b->shot_power > 0) color(r, 255, 200, 100);
                 else color(r, 250, 250, 245);
-                draw_ball(r, b->x + (b->attached ? shake_x : 0),
+                draw_soft_ball(r, b, b->x + (b->attached ? shake_x : 0),
                           b->y + (b->attached ? shake_y : 0));
             }
             if (g->screen == PLAYING && any_attached(g)) {

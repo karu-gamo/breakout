@@ -67,7 +67,9 @@ static void test_release_and_gravity(void) {
         g.bricks[1][0] = true; ++g.remaining;
         Ball b = {.active = true, .gravity = true, .x = 70, .y = 124, .vy = i ? 1000 : 500};
         update_ball(&g, &b, (float)STEP);
-        assert(!g.bricks[1][0] && b.vy < 0);
+        assert(!g.bricks[1][0] && b.bounce_pending && b.vy > 0);
+        for (int step = 0; step < 20; ++step) update_ball(&g, &b, (float)STEP);
+        assert(!b.bounce_pending && b.vy < 0);
         recoil[i] = fabsf(b.vy);
     }
     assert(recoil[1] > recoil[0]);
@@ -133,6 +135,42 @@ static void test_trails_and_prediction(void) {
     assert(points[count - 1].alpha == 13);
 }
 
+static void test_soft_bounce(void) {
+    assert(RADIUS == 16);
+    Game g = start(123);
+    empty_stage(&g);
+    const float velocities[3][2] = {{-500, 120}, {500, 120}, {100, -500}};
+    for (int wall = 0; wall < 3; ++wall) {
+        Ball b = {.active = true, .x = wall == 0 ? RADIUS : wall == 1 ? WIDTH - RADIUS : 400,
+                  .y = wall == 2 ? 60 + RADIUS : 400,
+                  .vx = velocities[wall][0], .vy = velocities[wall][1]};
+        update_ball(&g, &b, (float)STEP);
+        assert(b.bounce_pending && b.deforming);
+        float x = b.x, y = b.y, vx = b.vx, vy = b.vy;
+        for (int step = 0; step < 8; ++step) update_ball(&g, &b, (float)STEP);
+        assert(b.bounce_pending && b.x == x && b.y == y && b.vx == vx && b.vy == vy);
+        assert(squash_amount(&b) > 0.5f);
+        for (int step = 0; step < 9; ++step) update_ball(&g, &b, (float)STEP);
+        assert(!b.bounce_pending && b.deforming);
+        assert(wall == 2 ? b.vy > 0 : wall == 0 ? b.vx > 0 : b.vx < 0);
+        assert(fabsf(hypotf(b.vx, b.vy) - hypotf(vx, vy)) < 0.001f);
+        for (int step = 0; step < 30; ++step) update_ball(&g, &b, (float)STEP);
+        assert(!b.deforming && squash_amount(&b) == 0);
+    }
+    empty_stage(&g);
+    g.bricks[0][0] = true; ++g.remaining;
+    Ball b = {.active = true, .x = 70, .y = 100 - RADIUS, .vy = 400};
+    update_ball(&g, &b, (float)STEP);
+    assert(b.bounce_pending && b.vy == 400 && !g.bricks[0][0] && g.score == 100);
+    for (int i = 0; i < 20; ++i) update_ball(&g, &b, (float)STEP);
+    assert(b.vy == -400 && g.score == 100);
+    empty_stage(&g);
+    g.bricks[0][0] = true; ++g.remaining;
+    b = (Ball){.active = true, .x = 70, .y = 100 - RADIUS, .vy = 400, .pierces = 5};
+    update_ball(&g, &b, (float)STEP);
+    assert(!b.bounce_pending && b.vy > 0 && b.pierces == 4);
+}
+
 static void test_render(void) {
     assert(SDL_Init(SDL_INIT_VIDEO));
     SDL_Surface *surface = SDL_CreateSurface(WIDTH, HEIGHT, SDL_PIXELFORMAT_RGBA32);
@@ -166,6 +204,16 @@ static void test_render(void) {
     /* Optional local capture for visual inspection. */
     if (SDL_getenv("BREAKBOUT_TEST_CAPTURE")) SDL_SaveBMP(surface, SDL_getenv("BREAKBOUT_TEST_CAPTURE"));
     g.animation_time += 0.25f; render(r, &g);
+    g.balls[0] = (Ball){.active = true, .x = RADIUS, .y = 400, .vx = -500};
+    begin_soft_bounce(&g.balls[0], 1, 0, 500, 0);
+    g.balls[0].squash_time = SOFT_COMPRESS_SECONDS;
+    render(r, &g);
+    Uint8 red, green, blue, alpha;
+    assert(SDL_ReadSurfacePixel(surface, 7, 420, &red, &green, &blue, &alpha));
+    assert(red > 200); /* Wider along the wall. */
+    assert(SDL_ReadSurfacePixel(surface, 23, 400, &red, &green, &blue, &alpha));
+    assert(red < 100); /* Narrower perpendicular to the wall. */
+    if (SDL_getenv("BREAKBOUT_SOFT_CAPTURE")) SDL_SaveBMP(surface, SDL_getenv("BREAKBOUT_SOFT_CAPTURE"));
     break_paddle(&g); render(r, &g);
     SDL_DestroyRenderer(r); SDL_DestroySurface(surface); SDL_Quit();
 }
@@ -175,6 +223,7 @@ int main(void) {
     test_release_and_gravity();
     test_multicatch_and_charge();
     test_trails_and_prediction();
+    test_soft_bounce();
     test_render();
     puts("PASS: random bonus placement, three-ball release, impulse/gravity/recoil, multicatch, shared charge, per-ball launch/guide, last-ball loss, trails and prediction");
     return 0;
