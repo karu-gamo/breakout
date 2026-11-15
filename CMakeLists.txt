@@ -21,3 +21,17 @@ set_target_properties(breakout PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/bin"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin")
+
+option(BREAKBOUT_BUILD_TESTS "Build headless gameplay regression tests" OFF)
+if(BREAKBOUT_BUILD_TESTS)
+    enable_testing()
+    add_executable(breakbout_tests tests/gameplay_test.c)
+    target_compile_features(breakbout_tests PRIVATE c_std_11)
+    target_link_libraries(breakbout_tests PRIVATE SDL3::SDL3)
+    if(NOT MSVC)
+        target_compile_options(breakbout_tests PRIVATE -Wall -Wextra -Wpedantic)
+        target_link_libraries(breakbout_tests PRIVATE m)
+    endif()
+    add_test(NAME gameplay COMMAND breakbout_tests)
+    set_tests_properties(gameplay PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+endif()
