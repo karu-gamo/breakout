@@ -307,9 +307,16 @@ static void test_endless_descent(void) {
         b = (Ball){.active = true, .x = 70, .y = 100 - RADIUS, .vy = 200};
         update_ball(&g, &b, (float)STEP);
         assert(g.screen == PLAYING && g.remaining == 0);
-        assert(g.level == 1 + (int)(g.destroyed / 100));
+        assert(g.level == 1);
     }
-    assert(g.level == 10 && g.destroyed == 901);
+    assert(g.level == 1 && g.destroyed == 901);
+    g.rows_toward_level = 0;
+    for (int row = 1; row <= 36; ++row) {
+        add_top_row(&g);
+        assert(g.level == 1 + row / 4);
+        assert(g.rows_toward_level == row % 4);
+    }
+    assert(g.level == 10);
     float level_ten = descent_speed(&g);
     g.level = 9; assert(descent_speed(&g) < level_ten);
     g.level = 19; assert(descent_speed(&g) == level_ten);

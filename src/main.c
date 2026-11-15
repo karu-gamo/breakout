@@ -91,7 +91,7 @@ typedef struct {
     float brick_hit_time[ROWS][COLS];
     float scroll_offset, row_age[ROWS];
     SDL_Color row_color[ROWS];
-    int generated_rows, bonus_credit, strong_credit, silvers_since_gold;
+    int generated_rows, rows_toward_level, bonus_credit, strong_credit, silvers_since_gold;
     int level, lives, remaining;
     bool fatal_death;
     Uint64 score, destroyed;
@@ -303,6 +303,7 @@ static void init_field(Game *g) {
 
 static void start_run(Game *g) {
     g->level = 1;
+    g->rows_toward_level = 0;
     g->lives = 3;
     g->fatal_death = false;
     g->silvers_since_gold = 0;
@@ -388,6 +389,10 @@ static void add_top_row(Game *g) {
     g->strong_credit = hard_interval ? (g->strong_credit + count) % hard_interval : 0;
     place_specials(g, cells, count, bonus_count, strong_count);
     g->remaining += count;
+    if (++g->rows_toward_level == 4) {
+        ++g->level;
+        g->rows_toward_level = 0;
+    }
 }
 
 static bool update_field(Game *g, float dt) {
@@ -643,7 +648,6 @@ static void update_ball(Game *g, Ball *b, float dt) {
                 }
                 g->score += 100;
                 ++g->destroyed;
-                g->level = 1 + (int)(g->destroyed / 100);
                 --g->remaining;
                 if (b->shot_power > 0) shatter(g, b, r, c);
             }
