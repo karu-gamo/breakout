@@ -43,7 +43,7 @@ typedef struct {
     bool left_down, right_down;
     float paddle_angle;
     float angle_history[PADDLE_HISTORY];
-    float charge, shot_power, attach_offset, shake_time;
+    float charge, shot_power, attach_offset, base_launch_angle, shake_time;
     int pierces;
     Uint32 random_state;
     Particle particles[MAX_PARTICLES];
@@ -100,6 +100,14 @@ static int paddle_trails(const Game *g, float positions[3]) {
     return count;
 }
 
+static float bounce_offset_angle(float offset) {
+    return clamp(offset / (PADDLE_W / 2), -1, 1) * 0.8f;
+}
+
+static float launch_angle(const Game *g) {
+    return g->base_launch_angle + g->paddle_angle;
+}
+
 static void place_attached_ball(Game *g) {
     float c = cosf(g->paddle_angle), n = sinf(g->paddle_angle);
     g->x = g->paddle + g->attach_offset * c + (RADIUS + 8.5f) * n;
@@ -126,6 +134,7 @@ static void reset_ball(Game *g) {
     g->charge = g->shot_power = 0;
     g->pierces = 0;
     g->attach_offset = 0;
+    g->base_launch_angle = 0;
     place_attached_ball(g);
     g->vx = speed(g) * 0.35f;
     g->vy = -sqrtf(speed(g) * speed(g) - g->vx * g->vx);
@@ -181,8 +190,8 @@ static void release_ball(Game *g) {
     g->pierces = (int)floorf(g->charge * 5.0f + 0.0001f);
     float launch_speed = speed(g) * (1.0f + 1.5f * g->charge);
     place_attached_ball(g);
-    g->vx = launch_speed * sinf(g->paddle_angle);
-    g->vy = -launch_speed * cosf(g->paddle_angle);
+    g->vx = launch_speed * sinf(launch_angle(g));
+    g->vy = -launch_speed * cosf(launch_angle(g));
     g->attached = false;
     g->charge = 0;
 }
@@ -289,6 +298,7 @@ static void update(Game *g, float dt) {
     float hit_offset;
     if (hit_paddle(g->paddle, g->paddle_angle, old_x, old_y, g->x, g->y, &hit_offset)) {
         reset_ball(g);
+        g->base_launch_angle = bounce_offset_angle(hit_offset);
         g->attach_offset = clamp(hit_offset, -PADDLE_W / 2 + RADIUS,
                                  PADDLE_W / 2 - RADIUS);
         place_attached_ball(g);
@@ -301,7 +311,7 @@ static void update(Game *g, float dt) {
         float angle = g->angle_history[(i + 1) * (PADDLE_HISTORY - 1) / count];
         if (!hit_paddle(trails[i], angle, old_x, old_y, g->x, g->y, &hit_offset)) continue;
         float magnitude = hypotf(g->vx, g->vy);
-        float bounce_angle = angle + clamp(hit_offset / (PADDLE_W / 2), -1, 1) * 0.8f;
+        float bounce_angle = angle + bounce_offset_angle(hit_offset);
         g->vx = magnitude * sinf(bounce_angle);
         g->vy = -magnitude * cosf(bounce_angle);
         float c = cosf(angle), n = sinf(angle);
@@ -430,7 +440,7 @@ static void draw_paddle(SDL_Renderer *r, float x, float y, float angle,
 
 static void render_launch_guide(SDL_Renderer *r, const Game *g) {
     if (g->screen != PLAYING || !g->attached) return;
-    float dx = sinf(g->paddle_angle), dy = -cosf(g->paddle_angle);
+    float dx = sinf(launch_angle(g)), dy = -cosf(launch_angle(g));
     color(r, 255, 225, 130);
     for (int i = 0; i < 10; ++i) {
         float start = 15 + i * 13.0f, end = start + 7;
