@@ -92,7 +92,8 @@ typedef struct {
     float scroll_offset, row_age[ROWS];
     SDL_Color row_color[ROWS];
     int generated_rows, bonus_credit, strong_credit, silvers_since_gold;
-    int level, remaining;
+    int level, lives, remaining;
+    bool fatal_death;
     Uint64 score, destroyed;
 } Game;
 
@@ -292,6 +293,8 @@ static void init_field(Game *g) {
 
 static void start_run(Game *g) {
     g->level = 1;
+    g->lives = 3;
+    g->fatal_death = false;
     g->silvers_since_gold = 0;
     g->destroyed = g->score = 0;
     g->miss_time = 0;
@@ -482,7 +485,9 @@ static void update_particles(Game *g, float dt) {
     }
 }
 
-static void break_paddle(Game *g) {
+static void break_paddle(Game *g, bool fatal) {
+    g->fatal_death = fatal;
+    if (!fatal) --g->lives;
     g->miss_time = MISS_DURATION;
     g->left_down = false;
     SDL_memset(g->balls, 0, sizeof(g->balls));
@@ -678,12 +683,18 @@ static void update(Game *g, float dt) {
             p->angle += p->spin * dt;
         }
         g->miss_time = fmaxf(0, g->miss_time - dt);
-        if (g->miss_time == 0) g->screen = GAME_OVER;
+        if (g->miss_time == 0) {
+            if (g->fatal_death || g->lives == 0) g->screen = GAME_OVER;
+            else {
+                reset_history(g);
+                reset_ball(g, &g->balls[0]);
+            }
+        }
         return;
     }
     record_paddle(g);
     if (update_field(g, dt)) {
-        break_paddle(g);
+        break_paddle(g, true);
         return;
     }
     if (any_attached(g) && g->left_down) {
@@ -692,7 +703,7 @@ static void update(Game *g, float dt) {
     }
     for (int i = 0; i < MAX_BALLS && g->screen == PLAYING; ++i)
         update_ball(g, &g->balls[i], dt);
-    if (g->screen == PLAYING && ball_count(g) == 0) break_paddle(g);
+    if (g->screen == PLAYING && ball_count(g) == 0) break_paddle(g, false);
 }
 
 typedef struct {
@@ -873,8 +884,8 @@ static void render(SDL_Renderer *r, const Game *g) {
         centered(r, 580, "ESC: QUIT", 1.5f);
     } else {
         char hud[128];
-        SDL_snprintf(hud, sizeof(hud), "LEVEL %d   BALLS %d   SCORE %llu",
-                     g->level, ball_count(g), (unsigned long long)g->score);
+        SDL_snprintf(hud, sizeof(hud), "LEVEL %d   LIVES %d   BALLS %d   SCORE %llu",
+                     g->level, g->lives, ball_count(g), (unsigned long long)g->score);
         centered(r, 24, hud, 2);
         color(r, 40, 55, 78);
         SDL_RenderLine(r, 0, 59, WIDTH, 59);

@@ -119,7 +119,15 @@ static void test_multicatch_and_charge(void) {
     update(&g, (float)STEP);
     assert(g.miss_time > 0 && ball_count(&g) == 0);
     for (int i = 0; i < 220; ++i) update(&g, (float)STEP);
-    assert(g.screen == GAME_OVER && ball_count(&g) == 0);
+    assert(g.screen == PLAYING && ball_count(&g) == 1 && g.lives == 2);
+    assert(g.balls[0].attached);
+    for (int miss = 0; miss < 2; ++miss) {
+        release_ball(&g);
+        g.balls[0].x = 20; g.balls[0].y = HEIGHT + RADIUS + 1; g.balls[0].vy = 100;
+        update(&g, (float)STEP);
+        for (int frame = 0; frame < 220; ++frame) update(&g, (float)STEP);
+    }
+    assert(g.screen == GAME_OVER && g.lives == 0);
 }
 
 static void test_trails_and_prediction(void) {
@@ -341,9 +349,9 @@ static void test_block_death(void) {
     g.row_age[row] = BRICK_FADE_SECONDS;
     g.level = 5; g.destroyed = 450; g.score = 45000;
     update(&g, (float)STEP);
-    assert(g.miss_time > 0 && ball_count(&g) == 0);
+    assert(g.miss_time > 0 && ball_count(&g) == 0 && g.fatal_death && g.lives == 3);
     for (int i = 0; i < 220; ++i) update(&g, (float)STEP);
-    assert(g.screen == GAME_OVER && g.level == 5 && g.score == 45000 && g.destroyed == 450);
+    assert(g.screen == GAME_OVER && g.lives == 3 && g.level == 5 && g.score == 45000 && g.destroyed == 450);
     assert(ball_count(&g) == 0);
     click(&g); assert(g.screen == TITLE);
     click(&g); assert(g.screen == PLAYING && g.level == 1 && g.score == 0);
@@ -536,7 +544,7 @@ static void test_render(void) {
     assert(squash_amount(&g.balls[0]) > 0 && squash_amount(&g.balls[0]) < 1);
     assert(!update_soft_bounce(&g.balls[0], 0.25f));
     assert(!g.balls[0].deforming && squash_amount(&g.balls[0]) == 0);
-    break_paddle(&g); render(r, &g);
+    break_paddle(&g, false); render(r, &g);
     g.screen = PLAYING; g.miss_time = 0;
     init_field(&g); add_top_row(&g);
     for (int col = 0; col < COLS; ++col) g.bonus_bricks[0][col] = false;
