@@ -47,5 +47,9 @@ if defined BREAKOUT_CMAKE exit /b 0
 if exist "%ProgramFiles(x86)%\CMake\bin\cmake.exe" set "BREAKOUT_CMAKE=%ProgramFiles(x86)%\CMake\bin\cmake.exe"
 if defined BREAKOUT_CMAKE exit /b 0
 if not exist "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" exit /b 0
-for /f "usebackq delims=" %%I in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"`) do if not defined BREAKOUT_CMAKE set "BREAKOUT_CMAKE=%%I"
+rem Run from the installer directory to avoid nested cmd quoting of Program Files.
+pushd "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
+if errorlevel 1 exit /b 0
+for /f "delims=" %%I in ('vswhere.exe -latest -products * -find Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe') do if not defined BREAKOUT_CMAKE set "BREAKOUT_CMAKE=%%I"
+popd
 exit /b 0
