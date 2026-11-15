@@ -12,8 +12,10 @@
 
 #define WIDTH 960
 #define HEIGHT 720
-#define COLS 10
-#define ROWS 5
+#define BASE_COLS 10
+#define BASE_ROWS 5
+#define COLS (BASE_COLS * 2)
+#define ROWS (BASE_ROWS * 2)
 #define RADIUS 16.0f
 #define SOFT_COMPRESS_SECONDS 0.0325f
 #define SOFT_RECOVER_SECONDS 0.5f
@@ -175,7 +177,7 @@ static void reset_ball(const Game *g, Ball *b) {
 }
 
 static SDL_FRect brick_rect(int row, int col) {
-    return (SDL_FRect){42.0f + col * 88.0f, 100.0f + row * 32.0f, 82, 25};
+    return (SDL_FRect){42.0f + col * 44.0f, 100.0f + row * 16.0f, 41, 12.5f};
 }
 
 static float random_unit(Game *g);
@@ -189,9 +191,10 @@ static void load_stage(Game *g) {
     for (int r = 0; r < ROWS; ++r) {
         for (int c = 0; c < COLS; ++c) {
             /* Three simple layouts repeat as the ball gradually gets faster. */
+            int base_row = r / 2, base_col = c / 2;
             bool present = (g->stage % 3 == 1) ||
-                (g->stage % 3 == 2 ? (r + c) % 2 == 0 || r == 0 :
-                 c >= r && c < COLS - r);
+                (g->stage % 3 == 2 ? (base_row + base_col) % 2 == 0 || base_row == 0 :
+                 base_col >= base_row && base_col < BASE_COLS - base_row);
             g->bricks[r][c] = present;
             g->remaining += present;
         }
@@ -307,9 +310,9 @@ static void shatter(Game *g, const Ball *b, int row, int col) {
         p.vy = -100 - random_unit(g) * 230 + b->vy * 0.12f;
         p.life = p.lifetime = lifetime;
         p.size = 3 + random_unit(g) * 5;
-        p.red = (Uint8)(245 - row * 25);
-        p.green = (Uint8)(100 + row * 25);
-        p.blue = (Uint8)(100 + row * 30);
+        p.red = (Uint8)(245 - (row / 2) * 25);
+        p.green = (Uint8)(100 + (row / 2) * 25);
+        p.blue = (Uint8)(100 + (row / 2) * 30);
         g->particles[slot++] = p;
     }
 }
@@ -714,7 +717,7 @@ static void render(SDL_Renderer *r, const Game *g) {
         color(r, 40, 55, 78);
         SDL_RenderLine(r, 0, 59, WIDTH, 59);
         for (int row = 0; row < ROWS; ++row) {
-            color(r, (Uint8)(245 - row * 25), (Uint8)(100 + row * 25), (Uint8)(100 + row * 30));
+            color(r, (Uint8)(245 - (row / 2) * 25), (Uint8)(100 + (row / 2) * 25), (Uint8)(100 + (row / 2) * 30));
             for (int col = 0; col < COLS; ++col) {
                 if (g->bricks[row][col]) {
                     SDL_FRect rect = brick_rect(row, col);
@@ -724,11 +727,12 @@ static void render(SDL_Renderer *r, const Game *g) {
                         SDL_RenderRect(r, &rect);
                         for (int ball = 0; ball < 3; ++ball) {
                             float phase = g->animation_time * (13 + ball * 3) + row * 7 + col * 3 + ball * 2;
-                            float x = rect.x + rect.w / 2 + sinf(phase) * (rect.w / 2 - 6);
-                            float y = rect.y + rect.h / 2 + sinf(phase * 1.7f + ball) * (rect.h / 2 - 5);
-                            draw_ball(r, g->ball_texture, x, y, 4);
+                            float icon_radius = 2.5f;
+                            float x = rect.x + rect.w / 2 + sinf(phase) * (rect.w / 2 - icon_radius - 1);
+                            float y = rect.y + rect.h / 2 + sinf(phase * 1.7f + ball) * (rect.h / 2 - icon_radius - 1);
+                            draw_ball(r, g->ball_texture, x, y, icon_radius);
                         }
-                        color(r, (Uint8)(245 - row * 25), (Uint8)(100 + row * 25), (Uint8)(100 + row * 30));
+                        color(r, (Uint8)(245 - (row / 2) * 25), (Uint8)(100 + (row / 2) * 25), (Uint8)(100 + (row / 2) * 30));
                     }
                 }
             }

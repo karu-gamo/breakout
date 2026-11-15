@@ -34,6 +34,12 @@ static void test_placement(void) {
             }
         }
         assert(bonus == total / 11 && g.remaining == total);
+        assert(total == (stage % 3 == 1 ? 200 : 120));
+        assert(1 + bonus * 3 <= MAX_BALLS);
+        SDL_FRect first = brick_rect(0, 0), last = brick_rect(ROWS - 1, COLS - 1);
+        assert(first.w == 41 && first.h == 12.5f);
+        assert(first.w * first.h == 82 * 25 / 4.0f);
+        assert(last.x + last.w < WIDTH && last.y + last.h < PREVIEW_START_Y);
         assert(ball_count(&g) == 1 && g.balls[0].attached);
     }
 }
