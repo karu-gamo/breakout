@@ -33,8 +33,7 @@
 #define PADDLE_HISTORY 49
 #define TRAIL_FAST_SPEED 1200.0f
 #define MISS_DURATION 0.85f
-#define DEG_TO_RAD (0.017453292519943295f)
-#define MAX_TILT (40.0f * DEG_TO_RAD)
+#define MAX_PADDLE_SCALE 3.0f
 #define PREVIEW_SAMPLES (PREVIEW_SEGMENTS + 1)
 #define PREVIEW_END_Y (PADDLE_Y - RADIUS)
 
@@ -45,7 +44,7 @@ typedef struct {
 } Particle;
 
 typedef struct {
-    float x, y, vx, vy, angle, spin;
+    float x, y, vx, vy, angle, spin, width;
 } PaddlePiece;
 
 typedef struct {
@@ -63,13 +62,13 @@ typedef struct {
 typedef struct {
     Screen screen;
     SDL_Texture *ball_texture;
-    float paddle, paddle_angle;
+    float paddle, paddle_width, paddle_speed;
     bool left_down;
     float charge, shake_time, animation_time;
     Ball balls[MAX_BALLS];
     Uint32 random_state;
     Particle particles[MAX_PARTICLES];
-    float paddle_history[PADDLE_HISTORY], angle_history[PADDLE_HISTORY];
+    float paddle_history[PADDLE_HISTORY], width_history[PADDLE_HISTORY];
     float miss_time;
     PaddlePiece paddle_pieces[3];
     bool bricks[ROWS][COLS], bonus_bricks[ROWS][COLS];
@@ -105,27 +104,27 @@ static float speed(const Game *g) {
 }
 
 static void reset_history(Game *g) {
+    g->paddle_width = PADDLE_W;
+    g->paddle_speed = 0;
     for (int i = 0; i < PADDLE_HISTORY; ++i) {
         g->paddle_history[i] = g->paddle;
-        g->angle_history[i] = g->paddle_angle;
+        g->width_history[i] = g->paddle_width;
     }
 }
 
 static void record_paddle(Game *g) {
     float movement = g->paddle - g->paddle_history[0];
-    if (movement != 0)
-        g->paddle_angle = clamp(g->paddle_angle + movement * 0.15f * DEG_TO_RAD,
-                                -MAX_TILT, MAX_TILT);
-    else {
-        float amount = 90 * DEG_TO_RAD * (float)STEP;
-        g->paddle_angle -= clamp(g->paddle_angle, -amount, amount);
-    }
+    float smoothing = 1 - expf(-(float)STEP / 0.08f);
+    g->paddle_speed += (fabsf(movement) / (float)STEP - g->paddle_speed) * smoothing;
+    g->paddle_width = PADDLE_W * (1 + (MAX_PADDLE_SCALE - 1) *
+        clamp(g->paddle_speed / TRAIL_FAST_SPEED, 0, 1));
+    g->paddle = clamp(g->paddle, g->paddle_width / 2, WIDTH - g->paddle_width / 2);
     for (int i = PADDLE_HISTORY - 1; i > 0; --i) {
         g->paddle_history[i] = g->paddle_history[i - 1];
-        g->angle_history[i] = g->angle_history[i - 1];
+        g->width_history[i] = g->width_history[i - 1];
     }
     g->paddle_history[0] = g->paddle;
-    g->angle_history[0] = g->paddle_angle;
+    g->width_history[0] = g->paddle_width;
 }
 
 static int paddle_trails(const Game *g, float positions[MAX_TRAILS]) {
@@ -140,32 +139,28 @@ static int paddle_trails(const Game *g, float positions[MAX_TRAILS]) {
     return count;
 }
 
-static float bounce_offset_angle(float offset) {
-    return clamp(offset / (PADDLE_W / 2), -1, 1) * 0.8f;
+static float bounce_offset_angle(float offset, float width) {
+    return clamp(offset / (width / 2), -1, 1) * 0.8f;
 }
 
-static float launch_angle(const Game *g, const Ball *b) {
-    return b->base_launch_angle + g->paddle_angle;
+static float launch_angle(const Ball *b) {
+    return b->base_launch_angle;
 }
 
 static void place_attached_ball(const Game *g, Ball *b) {
-    float c = cosf(g->paddle_angle), n = sinf(g->paddle_angle);
-    b->x = g->paddle + b->attach_offset * c + (RADIUS + 8.5f) * n;
-    b->y = PADDLE_Y + 7.5f + b->attach_offset * n - (RADIUS + 8.5f) * c;
+    b->attach_offset = clamp(b->attach_offset, -g->paddle_width / 2 + RADIUS,
+                             g->paddle_width / 2 - RADIUS);
+    b->x = g->paddle + b->attach_offset;
+    b->y = PADDLE_Y - RADIUS - 1;
 }
 
-static bool hit_paddle(float center, float angle, float old_x, float old_y,
+static bool hit_paddle(float center, float width, float old_x, float old_y,
                        float x, float y, float *offset) {
-    float c = cosf(angle), n = sinf(angle);
-    float before = (old_x - center) * n - (old_y - PADDLE_Y - 7.5f) * c;
-    float after = (x - center) * n - (y - PADDLE_Y - 7.5f) * c;
-    float contact = 7.5f + RADIUS;
-    if (before < contact || after > contact || after >= before) return false;
-    float t = (before - contact) / (before - after);
-    float hx = old_x + (x - old_x) * t - center;
-    float hy = old_y + (y - old_y) * t - PADDLE_Y - 7.5f;
-    *offset = hx * c + hy * n;
-    return fabsf(*offset) <= PADDLE_W / 2 + RADIUS;
+    float contact = PADDLE_Y - RADIUS;
+    if (old_y > contact || y < contact || y <= old_y) return false;
+    float t = (contact - old_y) / (y - old_y);
+    *offset = old_x + (x - old_x) * t - center;
+    return fabsf(*offset) <= width / 2 + RADIUS;
 }
 
 static void reset_ball(const Game *g, Ball *b) {
@@ -188,7 +183,6 @@ static void load_stage(Game *g) {
     g->remaining = 0;
     g->miss_time = 0;
     g->left_down = false;
-    g->paddle_angle = 0;
     reset_history(g);
     SDL_memset(g->particles, 0, sizeof(g->particles));
     for (int r = 0; r < ROWS; ++r) {
@@ -265,8 +259,8 @@ static void release_ball(Game *g) {
         b->pierces = (int)floorf(g->charge * 5.0f + 0.0001f);
         float launch_speed = speed(g) * (1.0f + 1.5f * g->charge);
         place_attached_ball(g, b);
-        b->vx = launch_speed * sinf(launch_angle(g, b));
-        b->vy = -launch_speed * cosf(launch_angle(g, b));
+        b->vx = launch_speed * sinf(launch_angle(b));
+        b->vy = -launch_speed * cosf(launch_angle(b));
         start_paddle_spin(b, b->base_launch_angle);
         b->attached = false;
         b->gravity = false;
@@ -338,10 +332,10 @@ static void break_paddle(Game *g) {
     g->charge = 0;
     for (int i = 0; i < 3; ++i) {
         g->paddle_pieces[i] = (PaddlePiece){
-            g->paddle + (i - 1) * PADDLE_W / 3 * cosf(g->paddle_angle),
-            PADDLE_Y + 7.5f + (i - 1) * PADDLE_W / 3 * sinf(g->paddle_angle),
+            g->paddle + (i - 1) * g->paddle_width / 3,
+            PADDLE_Y + 7.5f,
             (i - 1) * 240.0f + (i == 1 ? 35 : 0), -330.0f - i * 45,
-            g->paddle_angle, (i == 1 ? -1 : 1) * (7.0f + i * 3)};
+            0, (i == 1 ? -1 : 1) * (7.0f + i * 3), g->paddle_width / 3};
     }
 }
 
@@ -427,11 +421,11 @@ static void update_ball(Game *g, Ball *b, float dt) {
         return;
     }
     float hit_offset;
-    if (hit_paddle(g->paddle, g->paddle_angle, old_x, old_y, b->x, b->y, &hit_offset)) {
+    if (hit_paddle(g->paddle, g->paddle_width, old_x, old_y, b->x, b->y, &hit_offset)) {
         reset_ball(g, b);
-        b->base_launch_angle = bounce_offset_angle(hit_offset);
-        b->attach_offset = clamp(hit_offset, -PADDLE_W / 2 + RADIUS,
-                                 PADDLE_W / 2 - RADIUS);
+        b->base_launch_angle = bounce_offset_angle(hit_offset, g->paddle_width);
+        b->attach_offset = clamp(hit_offset, -g->paddle_width / 2 + RADIUS,
+                                 g->paddle_width / 2 - RADIUS);
         place_attached_ball(g, b);
         return;
     }
@@ -439,16 +433,15 @@ static void update_ball(Game *g, Ball *b, float dt) {
     float trails[MAX_TRAILS];
     int count = paddle_trails(g, trails);
     for (int i = 0; i < count; ++i) {
-        float angle = g->angle_history[(i + 1) * (PADDLE_HISTORY - 1) / count];
-        if (!hit_paddle(trails[i], angle, old_x, old_y, b->x, b->y, &hit_offset)) continue;
+        float width = g->width_history[(i + 1) * (PADDLE_HISTORY - 1) / count];
+        if (!hit_paddle(trails[i], width, old_x, old_y, b->x, b->y, &hit_offset)) continue;
         float magnitude = hypotf(b->vx, b->vy);
-        float bounce_angle = angle + bounce_offset_angle(hit_offset);
+        float bounce_angle = bounce_offset_angle(hit_offset, width);
         b->vx = magnitude * sinf(bounce_angle);
         b->vy = -magnitude * cosf(bounce_angle);
-        start_paddle_spin(b, bounce_offset_angle(hit_offset));
-        float c = cosf(angle), n = sinf(angle);
-        b->x = trails[i] + hit_offset * c + (RADIUS + 8.5f) * n;
-        b->y = PADDLE_Y + 7.5f + hit_offset * n - (RADIUS + 8.5f) * c;
+        start_paddle_spin(b, bounce_offset_angle(hit_offset, width));
+        b->x = trails[i] + hit_offset;
+        b->y = PADDLE_Y - RADIUS - 1;
         b->preview_active = false;
         return;
     }
@@ -521,7 +514,6 @@ static void update(Game *g, float dt) {
         }
         g->miss_time = fmaxf(0, g->miss_time - dt);
         if (g->miss_time == 0) {
-            g->paddle_angle = 0;
             reset_history(g);
             if (g->lives == 0) g->screen = GAME_OVER;
             else reset_ball(g, &g->balls[0]);
@@ -656,15 +648,14 @@ static void centered(SDL_Renderer *r, float y, const char *text, float scale) {
     SDL_SetRenderScale(r, 1, 1);
 }
 
-static void draw_paddle(SDL_Renderer *r, float x, float y, float angle,
+static void draw_paddle(SDL_Renderer *r, float x, float y, float width,
                         float red, float green, float blue, float alpha) {
     SDL_Vertex vertices[4];
     const int indices[] = {0, 1, 2, 0, 2, 3};
-    float c = cosf(angle), n = sinf(angle);
     for (int j = 0; j < 4; ++j) {
-        float dx = (j == 0 || j == 3 ? -1 : 1) * PADDLE_W / 2;
+        float dx = (j == 0 || j == 3 ? -1 : 1) * width / 2;
         float dy = (j < 2 ? -1 : 1) * 7.5f;
-        vertices[j].position = (SDL_FPoint){x + dx * c - dy * n, y + dx * n + dy * c};
+        vertices[j].position = (SDL_FPoint){x + dx, y + dy};
         vertices[j].color = (SDL_FColor){red, green, blue, alpha};
         vertices[j].tex_coord = (SDL_FPoint){0, 0};
     }
@@ -673,7 +664,7 @@ static void draw_paddle(SDL_Renderer *r, float x, float y, float angle,
 
 static void render_launch_guide(SDL_Renderer *r, const Game *g, const Ball *b) {
     if (g->screen != PLAYING || !b->active || !b->attached) return;
-    float dx = sinf(launch_angle(g, b)), dy = -cosf(launch_angle(g, b));
+    float dx = sinf(launch_angle(b)), dy = -cosf(launch_angle(b));
     color(r, 255, 225, 130);
     for (int i = 0; i < 10; ++i) {
         float start = RADIUS + 7 + i * 13.0f, end = start + 7;
@@ -692,7 +683,7 @@ static void render_paddle_pieces(SDL_Renderer *r, const Game *g) {
         SDL_Vertex vertices[4];
         float cosine = cosf(p->angle), sine = sinf(p->angle);
         for (int j = 0; j < 4; ++j) {
-            float x = (j == 0 || j == 3 ? -1 : 1) * PADDLE_W / 6;
+            float x = (j == 0 || j == 3 ? -1 : 1) * p->width / 2;
             float y = (j < 2 ? -1 : 1) * 7.5f;
             vertices[j].position = (SDL_FPoint){p->x + x * cosine - y * sine,
                                                p->y + x * sine + y * cosine};
@@ -712,7 +703,7 @@ static void render(SDL_Renderer *r, const Game *g) {
         centered(r, 330, "CLICK TO START", 2);
         centered(r, 395, "MOVE MOUSE TO CONTROL THE PADDLE", 2);
         centered(r, 430, "HOLD LEFT BUTTON TO CHARGE / RELEASE TO FIRE", 2);
-        centered(r, 485, "MOVE MOUSE TO TILT AND AIM (+/-40 DEG)", 2);
+        centered(r, 485, "MOVE FASTER TO WIDEN THE PADDLE (UP TO 3X)", 2);
         centered(r, 560, "ESC: QUIT", 1.5f);
     } else {
         char hud[128];
@@ -760,8 +751,8 @@ static void render(SDL_Renderer *r, const Game *g) {
             int trail_count = paddle_trails(g, trails);
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
             for (int i = trail_count - 1; i >= 0; --i) {
-                float angle = g->angle_history[(i + 1) * (PADDLE_HISTORY - 1) / trail_count];
-                draw_paddle(r, trails[i], PADDLE_Y + 7.5f, angle,
+                float width = g->width_history[(i + 1) * (PADDLE_HISTORY - 1) / trail_count];
+                draw_paddle(r, trails[i], PADDLE_Y + 7.5f, width,
                             90 / 255.0f, 220 / 255.0f, 235 / 255.0f, (85 - (trail_count > 1 ? 40.0f * i / (trail_count - 1) : 0)) / 255.0f);
             }
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
@@ -771,7 +762,7 @@ static void render(SDL_Renderer *r, const Game *g) {
                 shake_y = sinf(g->shake_time * 137) * 2 * g->charge;
             }
             draw_paddle(r, g->paddle + shake_x, PADDLE_Y + 7.5f + shake_y,
-                        g->paddle_angle, (90 + 165 * g->charge) / 255.0f,
+                        g->paddle_width, (90 + 165 * g->charge) / 255.0f,
                         (220 - 170 * g->charge) / 255.0f, (235 - 185 * g->charge) / 255.0f, 1);
             for (int i = 0; i < MAX_BALLS; ++i) {
                 const Ball *b = &g->balls[i];

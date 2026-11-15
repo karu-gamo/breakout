@@ -83,7 +83,7 @@ static void test_multicatch_and_charge(void) {
             .x = g.paddle + (i - 1) * 30, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
         update_ball(&g, &g.balls[i], (float)STEP);
         assert(g.balls[i].attached && !g.balls[i].gravity);
-        assert(fabsf(g.balls[i].base_launch_angle - bounce_offset_angle((i - 1) * 30)) < 0.001f);
+        assert(fabsf(g.balls[i].base_launch_angle - bounce_offset_angle((i - 1) * 30, g.paddle_width)) < 0.001f);
     }
     g.left_down = true;
     for (int i = 0; i < 120; ++i) update(&g, (float)STEP);
@@ -93,7 +93,7 @@ static void test_multicatch_and_charge(void) {
     g.paddle += 200;
     update(&g, (float)STEP);
     float angles[3];
-    for (int i = 0; i < 3; ++i) angles[i] = launch_angle(&g, &g.balls[i]);
+    for (int i = 0; i < 3; ++i) angles[i] = launch_angle(&g.balls[i]);
     release_ball(&g);
     for (int i = 0; i < 3; ++i) {
         Ball *b = &g.balls[i];
@@ -117,7 +117,7 @@ static void test_trails_and_prediction(void) {
     for (int i = 0; i < PADDLE_HISTORY; ++i) g.paddle_history[i] = 700 - i * 5.0f;
     float trails[MAX_TRAILS];
     assert(paddle_trails(&g, trails) == 12 && trails[11] == 460);
-    g.paddle = 700; g.paddle_angle = 0;
+    g.paddle = 700;
     Ball b = {.active = true, .x = 465, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
     update_ball(&g, &b, (float)STEP);
     assert(!b.attached && b.vy < 0);
@@ -192,7 +192,7 @@ static void test_paddle_spin(void) {
     Game g = start(123);
     for (int i = 0; i < 3; ++i) {
         reset_ball(&g, &g.balls[i]);
-        g.balls[i].base_launch_angle = bounce_offset_angle(i * 24);
+        g.balls[i].base_launch_angle = bounce_offset_angle(i * 24, g.paddle_width);
     }
     release_ball(&g);
     assert(g.balls[0].spin_speed == 0 && g.balls[0].spin_left == 0);
@@ -203,6 +203,42 @@ static void test_paddle_spin(void) {
     update_spin(&left, 1);
     assert(left.spin_speed == 0);
     assert(SOFT_COMPRESS_SECONDS == 0.0325f);
+}
+
+static void test_speed_width(void) {
+    Game g = start(123);
+    assert(g.paddle_width == PADDLE_W);
+    g.paddle += 200;
+    update(&g, (float)STEP);
+    assert(g.paddle_width == PADDLE_W * 3);
+    assert(g.width_history[0] == g.paddle_width && g.width_history[1] == PADDLE_W);
+    float wide = g.paddle_width;
+    update(&g, (float)STEP);
+    assert(g.paddle_width <= wide);
+    for (int i = 0; i < 240; ++i) update(&g, (float)STEP);
+    assert(fabsf(g.paddle_width - PADDLE_W) < 0.01f);
+    g.paddle = 0; update(&g, (float)STEP);
+    assert(g.paddle >= g.paddle_width / 2);
+    empty_stage(&g);
+    g.paddle = 480; g.paddle_width = 360; reset_history(&g);
+    g.paddle_width = 360;
+    Ball b = {.active = true, .x = 630, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
+    update_ball(&g, &b, (float)STEP);
+    assert(b.attached && b.attach_offset > PADDLE_W / 2);
+    assert(fabsf(b.base_launch_angle - bounce_offset_angle(150, 360)) < 0.001f);
+    g.balls[0] = b;
+    g.paddle_width = PADDLE_W;
+    update_ball(&g, &g.balls[0], (float)STEP);
+    assert(fabsf(g.balls[0].attach_offset) <= PADDLE_W / 2 - RADIUS);
+    assert(launch_angle(&g.balls[0]) == b.base_launch_angle);
+    g.paddle = 600;
+    for (int i = 0; i < PADDLE_HISTORY; ++i) {
+        g.paddle_history[i] = 200;
+        g.width_history[i] = 360;
+    }
+    b = (Ball){.active = true, .x = 350, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
+    update_ball(&g, &b, (float)STEP);
+    assert(!b.attached && b.vy < 0); /* Only the old, extended trail reaches this point. */
 }
 
 static void test_render(void) {
@@ -220,7 +256,7 @@ static void test_render(void) {
     for (int i = 0; i < 3; ++i) {
         reset_ball(&g, &g.balls[i]);
         g.balls[i].attach_offset = (i - 1) * 30;
-        g.balls[i].base_launch_angle = bounce_offset_angle(g.balls[i].attach_offset);
+        g.balls[i].base_launch_angle = bounce_offset_angle(g.balls[i].attach_offset, g.paddle_width);
     }
     g.paddle += 150;
     update(&g, (float)STEP);
@@ -228,8 +264,8 @@ static void test_render(void) {
     /* The three guides must reach three separate points on the rendered surface. */
     for (int i = 0; i < 3; ++i) {
         const Ball *b = &g.balls[i];
-        int x = (int)SDL_roundf(b->x + sinf(launch_angle(&g, b)) * 122);
-        int y = (int)SDL_roundf(b->y - cosf(launch_angle(&g, b)) * 122);
+        int x = (int)SDL_roundf(b->x + sinf(launch_angle(b)) * 122);
+        int y = (int)SDL_roundf(b->y - cosf(launch_angle(b)) * 122);
         bool visible = false;
         for (int dy = -2; dy <= 2; ++dy) {
             for (int dx = -2; dx <= 2; ++dx) {
@@ -278,6 +314,7 @@ int main(void) {
     test_soft_bounce();
     test_spin();
     test_paddle_spin();
+    test_speed_width();
     test_render();
     puts("PASS: random bonus placement, three-ball release, impulse/gravity/recoil, multicatch, shared charge, per-ball launch/guide, last-ball loss, trails and prediction");
     return 0;
