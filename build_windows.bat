@@ -19,9 +19,12 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-"%BREAKOUT_CMAKE%" -S . -B build -G "Visual Studio 17 2022" -A x64
+rem Let CMake select the installed Visual Studio version.
+rem Clear the previous generator/toolset selection before configuring.
+"%BREAKOUT_CMAKE%" --fresh -S . -B build -A x64
 if errorlevel 1 (
-    echo ERROR: Configure failed. Install Visual Studio 2022 with Desktop development with C++.
+    echo ERROR: Configure failed. Check the CMake errors above.
+    echo Visual Studio requires Desktop development with C++ and a Windows SDK.
     echo.
     pause
     exit /b 1
