@@ -4,6 +4,12 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_NO_STDIO
+#include "../third_party/stb_image.h"
+#include "ball_png.h"
+
 #define WIDTH 960
 #define HEIGHT 720
 #define COLS 10
@@ -49,12 +55,14 @@ typedef struct {
     int pierces;
     bool preview_active;
     float preview_x, preview_vx, preview_vy;
+    float rotation, spin_speed, spin_left;
     bool deforming, bounce_pending;
     float squash_time, normal_x, normal_y, bounce_vx, bounce_vy;
 } Ball;
 
 typedef struct {
     Screen screen;
+    SDL_Texture *ball_texture;
     float paddle, paddle_angle;
     bool left_down;
     float charge, shake_time, animation_time;
@@ -67,6 +75,26 @@ typedef struct {
     bool bricks[ROWS][COLS], bonus_bricks[ROWS][COLS];
     int stage, lives, remaining, score;
 } Game;
+
+static SDL_Texture *load_ball_texture(SDL_Renderer *renderer) {
+    int width, height, channels;
+    unsigned char *pixels = stbi_load_from_memory(ball_png, sizeof(ball_png),
+                                                  &width, &height, &channels, 4);
+    if (!pixels) {
+        SDL_SetError("Cannot decode embedded ball.png: %s", stbi_failure_reason());
+        return NULL;
+    }
+    SDL_Surface *surface = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32,
+                                                pixels, width * 4);
+    SDL_Texture *texture = surface ? SDL_CreateTextureFromSurface(renderer, surface) : NULL;
+    SDL_DestroySurface(surface);
+    stbi_image_free(pixels);
+    if (texture) {
+        SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    }
+    return texture;
+}
 
 static float clamp(float v, float lo, float hi) {
     return v < lo ? lo : v > hi ? hi : v;
@@ -310,12 +338,30 @@ static void break_paddle(Game *g) {
     }
 }
 
+static void start_spin(Ball *b, float nx, float ny) {
+    float torque = b->vx * ny - b->vy * nx;
+    float direction = torque != 0 ? (torque > 0 ? 1 : -1) : (nx + ny >= 0 ? 1 : -1);
+    b->spin_speed = direction * hypotf(b->vx, b->vy) * 0.018f;
+    b->spin_left = 1.0f;
+}
+
+static void update_spin(Ball *b, float dt) {
+    if (b->spin_left <= 0) return;
+    float step = fminf(dt, b->spin_left);
+    float remaining = b->spin_left - step;
+    b->rotation = fmodf(b->rotation + b->spin_speed * (b->spin_left + remaining) * step / 2,
+                         6.28318530718f);
+    b->spin_left = remaining;
+    if (remaining <= 0) b->spin_speed = 0;
+}
+
 static void begin_soft_bounce(Ball *b, float nx, float ny, float vx, float vy) {
     float length = hypotf(nx, ny);
     b->normal_x = nx / length;
     b->normal_y = ny / length;
     b->bounce_vx = vx;
     b->bounce_vy = vy;
+    start_spin(b, nx, ny);
     b->squash_time = 0;
     b->deforming = b->bounce_pending = true;
 }
@@ -345,6 +391,7 @@ static bool update_soft_bounce(Ball *b, float dt) {
 
 static void update_ball(Game *g, Ball *b, float dt) {
     if (!b->active) return;
+    update_spin(b, dt);
     if (b->attached) {
         place_attached_ball(g, b);
         return;
@@ -414,11 +461,13 @@ static void update_ball(Game *g, Ball *b, float dt) {
             --g->remaining;
             if (b->shot_power > 0) shatter(g, b, r, c);
             if (g->remaining == 0) {
+                start_spin(b, -b->vx, -b->vy);
                 g->screen = CLEAR;
                 g->left_down = false;
                 return;
             }
             if (b->pierces > 0) {
+                start_spin(b, -b->vx, -b->vy);
                 --b->pierces;
                 continue;
             }
@@ -524,40 +573,44 @@ static void draw_disc(SDL_Renderer *r, float x, float y, float radius) {
     }
 }
 
-static void draw_ball(SDL_Renderer *r, float x, float y) {
-    draw_disc(r, x, y, RADIUS);
+static void draw_ball(SDL_Renderer *r, SDL_Texture *texture, float x, float y, float radius) {
+    if (!texture) { draw_disc(r, x, y, radius); return; }
+    Uint8 red, green, blue, alpha;
+    SDL_GetRenderDrawColor(r, &red, &green, &blue, &alpha);
+    SDL_SetTextureColorMod(texture, red, green, blue);
+    SDL_SetTextureAlphaMod(texture, alpha);
+    SDL_FRect dest = {x - radius, y - radius, radius * 2, radius * 2};
+    SDL_RenderTexture(r, texture, NULL, &dest);
 }
 
-static void draw_soft_ball(SDL_Renderer *r, const Ball *b, float x, float y) {
+static void draw_soft_ball(SDL_Renderer *r, SDL_Texture *texture, const Ball *b, float x, float y) {
+    if (!texture) { draw_disc(r, x, y, RADIUS); return; }
     float squash = squash_amount(b);
-    if (squash <= 0) {
-        draw_ball(r, x, y);
-        return;
-    }
-    const int segments = 40;
-    SDL_Vertex vertices[42];
-    int indices[120];
+    float normal_scale = 1 - 0.55f * squash;
+    float tangent_scale = 1 + 0.45f * squash;
+    float nx = b->deforming ? b->normal_x : 1;
+    float ny = b->deforming ? b->normal_y : 0;
+    x -= nx * RADIUS * (1 - normal_scale);
+    y -= ny * RADIUS * (1 - normal_scale);
     Uint8 red, green, blue, alpha;
     SDL_GetRenderDrawColor(r, &red, &green, &blue, &alpha);
     SDL_FColor tint = {red / 255.0f, green / 255.0f, blue / 255.0f, alpha / 255.0f};
-    float normal_radius = RADIUS * (1 - 0.55f * squash);
-    float tangent_radius = RADIUS * (1 + 0.45f * squash);
-    /* Move the visual center toward the surface so the squash stays in contact. */
-    x -= b->normal_x * (RADIUS - normal_radius);
-    y -= b->normal_y * (RADIUS - normal_radius);
-    vertices[0] = (SDL_Vertex){{x, y}, tint, {0, 0}};
-    for (int i = 0; i <= segments; ++i) {
-        float angle = (float)i / segments * 6.28318530718f;
-        float along_normal = cosf(angle) * normal_radius;
-        float along_tangent = sinf(angle) * tangent_radius;
-        vertices[i + 1] = (SDL_Vertex){
-            {x + b->normal_x * along_normal - b->normal_y * along_tangent,
-             y + b->normal_y * along_normal + b->normal_x * along_tangent}, tint, {0, 0}};
-        if (i < segments) {
-            indices[i * 3] = 0; indices[i * 3 + 1] = i + 1; indices[i * 3 + 2] = i + 2;
-        }
+    SDL_SetTextureColorMod(texture, 255, 255, 255);
+    SDL_SetTextureAlphaMod(texture, 255);
+    SDL_Vertex vertices[4];
+    const int indices[] = {0, 1, 2, 0, 2, 3};
+    float cosine = cosf(b->rotation), sine = sinf(b->rotation);
+    for (int i = 0; i < 4; ++i) {
+        float u = i == 0 || i == 3 ? 0 : 1, v = i < 2 ? 0 : 1;
+        float dx = (u * 2 - 1) * RADIUS, dy = (v * 2 - 1) * RADIUS;
+        float rx = dx * cosine - dy * sine, ry = dx * sine + dy * cosine;
+        float along_normal = (rx * nx + ry * ny) * normal_scale;
+        float along_tangent = (-rx * ny + ry * nx) * tangent_scale;
+        vertices[i] = (SDL_Vertex){
+            {x + nx * along_normal - ny * along_tangent,
+             y + ny * along_normal + nx * along_tangent}, tint, {u, v}};
     }
-    SDL_RenderGeometry(r, NULL, vertices, segments + 2, indices, segments * 3);
+    SDL_RenderGeometry(r, texture, vertices, 4, indices, 6);
 }
 
 static void render_prediction(SDL_Renderer *r, const Game *g, const Ball *b) {
@@ -568,7 +621,7 @@ static void render_prediction(SDL_Renderer *r, const Game *g, const Ball *b) {
     for (int i = count - 1; i >= 0; --i) {
         if (samples[i].alpha == 0) continue;
         SDL_SetRenderDrawColor(r, 250, 250, 245, samples[i].alpha);
-        draw_ball(r, samples[i].x, samples[i].y);
+        draw_ball(r, g->ball_texture, samples[i].x, samples[i].y, RADIUS);
     }
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
 }
@@ -662,7 +715,7 @@ static void render(SDL_Renderer *r, const Game *g) {
                             float phase = g->animation_time * (13 + ball * 3) + row * 7 + col * 3 + ball * 2;
                             float x = rect.x + rect.w / 2 + sinf(phase) * (rect.w / 2 - 6);
                             float y = rect.y + rect.h / 2 + sinf(phase * 1.7f + ball) * (rect.h / 2 - 5);
-                            draw_disc(r, x, y, 4);
+                            draw_ball(r, g->ball_texture, x, y, 4);
                         }
                         color(r, (Uint8)(245 - row * 25), (Uint8)(100 + row * 25), (Uint8)(100 + row * 30));
                     }
@@ -707,8 +760,8 @@ static void render(SDL_Renderer *r, const Game *g) {
                 render_launch_guide(r, g, b);
                 if (b->gravity) color(r, 255, 235, 130);
                 else if (b->shot_power > 0) color(r, 255, 200, 100);
-                else color(r, 250, 250, 245);
-                draw_soft_ball(r, b, b->x + (b->attached ? shake_x : 0),
+                else color(r, 255, 255, 255);
+                draw_soft_ball(r, g->ball_texture, b, b->x + (b->attached ? shake_x : 0),
                           b->y + (b->attached ? shake_y : 0));
             }
             if (g->screen == PLAYING && any_attached(g)) {
@@ -750,6 +803,12 @@ int main(int argc, char **argv) {
     SDL_SetRenderVSync(renderer, 1);
     Game game = {.screen = TITLE, .paddle = WIDTH / 2,
                  .random_state = (Uint32)SDL_GetPerformanceCounter()};
+    game.ball_texture = load_ball_texture(renderer);
+    if (!game.ball_texture) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "BreakBout", SDL_GetError(), window);
+        SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
+        return 1;
+    }
     bool running = true, focused = true;
     Uint64 last = SDL_GetPerformanceCounter();
     double accumulator = 0;
@@ -787,6 +846,7 @@ int main(int argc, char **argv) {
         render(renderer, &game);
         SDL_Delay(1);
     }
+    SDL_DestroyTexture(game.ball_texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();

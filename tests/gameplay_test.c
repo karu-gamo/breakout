@@ -171,6 +171,23 @@ static void test_soft_bounce(void) {
     assert(!b.bounce_pending && b.vy > 0 && b.pierces == 4);
 }
 
+static void test_spin(void) {
+    Ball slow = {.active = true, .vx = -300, .vy = 100};
+    Ball fast = slow; fast.vx *= 2; fast.vy *= 2;
+    begin_soft_bounce(&slow, 1, 0, 300, 100);
+    begin_soft_bounce(&fast, 1, 0, 600, 200);
+    assert(fabsf(fast.spin_speed - slow.spin_speed * 2) < 0.0001f);
+    float initial = fast.spin_speed;
+    update_spin(&fast, 0.5f);
+    assert(fast.rotation != 0 && fast.spin_left == 0.5f);
+    assert(fabsf(fast.spin_speed * fast.spin_left) < fabsf(initial));
+    update_spin(&fast, 0.5f);
+    assert(fast.spin_left == 0 && fast.spin_speed == 0);
+    float rotation = fast.rotation;
+    update_spin(&fast, 1);
+    assert(fast.rotation == rotation);
+}
+
 static void test_render(void) {
     assert(SDL_Init(SDL_INIT_VIDEO));
     SDL_Surface *surface = SDL_CreateSurface(WIDTH, HEIGHT, SDL_PIXELFORMAT_RGBA32);
@@ -178,6 +195,11 @@ static void test_render(void) {
     SDL_Renderer *r = SDL_CreateSoftwareRenderer(surface);
     assert(r);
     Game g = start(123);
+    g.ball_texture = load_ball_texture(r);
+    assert(g.ball_texture);
+    float width, height;
+    assert(SDL_GetTextureSize(g.ball_texture, &width, &height));
+    assert(width == 32 && height == 32);
     for (int i = 0; i < 3; ++i) {
         reset_ball(&g, &g.balls[i]);
         g.balls[i].attach_offset = (i - 1) * 30;
@@ -210,11 +232,12 @@ static void test_render(void) {
     render(r, &g);
     Uint8 red, green, blue, alpha;
     assert(SDL_ReadSurfacePixel(surface, 7, 420, &red, &green, &blue, &alpha));
-    assert(red > 200); /* Wider along the wall. */
+    assert(blue > 100); /* Wider along the wall, with the PNG sprite. */
     assert(SDL_ReadSurfacePixel(surface, 23, 400, &red, &green, &blue, &alpha));
     assert(red < 100); /* Narrower perpendicular to the wall. */
     if (SDL_getenv("BREAKBOUT_SOFT_CAPTURE")) SDL_SaveBMP(surface, SDL_getenv("BREAKBOUT_SOFT_CAPTURE"));
     break_paddle(&g); render(r, &g);
+    SDL_DestroyTexture(g.ball_texture);
     SDL_DestroyRenderer(r); SDL_DestroySurface(surface); SDL_Quit();
 }
 
@@ -224,6 +247,7 @@ int main(void) {
     test_multicatch_and_charge();
     test_trails_and_prediction();
     test_soft_bounce();
+    test_spin();
     test_render();
     puts("PASS: random bonus placement, three-ball release, impulse/gravity/recoil, multicatch, shared charge, per-ball launch/guide, last-ball loss, trails and prediction");
     return 0;
