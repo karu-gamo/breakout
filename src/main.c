@@ -18,7 +18,9 @@
 #define PREVIEW_SEGMENTS 10
 #define MAX_PARTICLES 768
 #define CHARGE_SECONDS 1.0f
-#define PADDLE_HISTORY 25
+#define TRAIL_SECONDS 0.2f
+#define MAX_TRAILS 6
+#define PADDLE_HISTORY 49
 #define TRAIL_FAST_SPEED 1200.0f
 #define MISS_DURATION 0.85f
 #define DEG_TO_RAD (0.017453292519943295f)
@@ -88,13 +90,13 @@ static void record_paddle(Game *g) {
     g->angle_history[0] = g->paddle_angle;
 }
 
-static int paddle_trails(const Game *g, float positions[3]) {
+static int paddle_trails(const Game *g, float positions[MAX_TRAILS]) {
     if (g->miss_time > 0 || g->screen != PLAYING) return 0;
     float travel = 0;
     for (int i = 1; i < PADDLE_HISTORY; ++i)
         travel += fabsf(g->paddle_history[i] - g->paddle_history[i - 1]);
-    float velocity = travel / 0.1f;
-    int count = velocity >= TRAIL_FAST_SPEED ? 3 : velocity >= 600 ? 2 : 1;
+    float velocity = travel / TRAIL_SECONDS;
+    int count = 1 + (int)(clamp(velocity / TRAIL_FAST_SPEED, 0, 1) * (MAX_TRAILS - 1));
     for (int i = 0; i < count; ++i)
         positions[i] = g->paddle_history[(i + 1) * (PADDLE_HISTORY - 1) / count];
     return count;
@@ -305,7 +307,7 @@ static void update(Game *g, float dt) {
         return;
     }
     /* All body contacts are resolved before any afterimage contact. */
-    float trails[3];
+    float trails[MAX_TRAILS];
     int count = paddle_trails(g, trails);
     for (int i = 0; i < count; ++i) {
         float angle = g->angle_history[(i + 1) * (PADDLE_HISTORY - 1) / count];
@@ -511,13 +513,13 @@ static void render(SDL_Renderer *r, const Game *g) {
         if (g->miss_time > 0) {
             render_paddle_pieces(r, g);
         } else if (g->screen != GAME_OVER) {
-            float trails[3];
+            float trails[MAX_TRAILS];
             int trail_count = paddle_trails(g, trails);
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
             for (int i = trail_count - 1; i >= 0; --i) {
                 float angle = g->angle_history[(i + 1) * (PADDLE_HISTORY - 1) / trail_count];
                 draw_paddle(r, trails[i], PADDLE_Y + 7.5f, angle,
-                            90 / 255.0f, 220 / 255.0f, 235 / 255.0f, (85 - i * 20) / 255.0f);
+                            90 / 255.0f, 220 / 255.0f, 235 / 255.0f, (85 - (trail_count > 1 ? 40.0f * i / (trail_count - 1) : 0)) / 255.0f);
             }
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
             float shake_x = 0, shake_y = 0;
