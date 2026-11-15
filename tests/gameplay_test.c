@@ -379,11 +379,11 @@ static void test_level_colors(void) {
 }
 
 static void test_strong_bricks(void) {
-    assert(strong_interval(9) == 0 && strong_interval(10) == 20);
-    assert(strong_interval(14) == 20 && strong_interval(15) == 19);
-    assert(strong_interval(60) == 10 && strong_interval(500) == 10);
-    assert(split_interval(10) == 30 && split_interval(14) == 30);
-    assert(split_interval(15) == 31 && split_interval(160) == 60 && split_interval(500) == 60);
+    assert(strong_interval(9) == 0 && strong_interval(10) == 60);
+    assert(strong_interval(14) == 60 && strong_interval(15) == 59);
+    assert(strong_interval(205) == 21 && strong_interval(210) == 20 && strong_interval(500) == 20);
+    assert(split_interval(1) == 30 && split_interval(4) == 30 && split_interval(5) == 31);
+    assert(split_interval(9) == 32 && split_interval(120) == 59 && split_interval(121) == 60 && split_interval(500) == 60);
     const int levels[] = {1, 9, 10, 15, 60, 160};
     for (int index = 0; index < (int)SDL_arraysize(levels); ++index) {
         Game g = start(123); g.level = levels[index]; init_field(&g);

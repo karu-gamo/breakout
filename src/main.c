@@ -218,14 +218,14 @@ static SDL_Color generated_row_color(int level, int row_number) {
 }
 
 static int split_interval(int level) {
-    int increase = level > 10 ? (level - 10) / 5 : 0;
+    int increase = level > 1 ? (level - 1) / 4 : 0;
     return BONUS_BRICK_INTERVAL + (increase < 30 ? increase : 30);
 }
 
 static int strong_interval(int level) {
     if (level < 10) return 0;
-    int interval = 20 - (level - 10) / 5;
-    return interval > 10 ? interval : 10;
+    int interval = 60 - (level - 10) / 5;
+    return interval > 20 ? interval : 20;
 }
 
 static void place_specials(Game *g, int *cells, int count, int bonuses, int strong) {
