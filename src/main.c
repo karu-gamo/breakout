@@ -22,8 +22,9 @@
 #define BRICK_H 12.5f
 #define DESCENT_LINE_Y 260.0f
 #define BASE_DESCENT_SPEED 8.0f
-#define BONUS_BRICK_INTERVAL 30
-#define STRONG_BRICK_HITS 4
+#define BONUS_BRICK_INTERVAL 40
+#define SILVER_BRICK_HITS 4
+#define GOLD_BRICK_HITS 8
 #define BRICK_FADE_SECONDS 0.5f
 #define RADIUS 16.0f
 #define SOFT_COMPRESS_SECONDS 0.0325f
@@ -51,6 +52,7 @@
 #define PREVIEW_END_Y (PADDLE_Y - RADIUS)
 
 typedef enum { TITLE, PLAYING, GAME_OVER } Screen;
+typedef enum { NO_METAL, SILVER, GOLD } StrongType;
 typedef struct {
     float x, y, vx, vy, life, lifetime, size;
     Uint8 red, green, blue;
@@ -85,11 +87,11 @@ typedef struct {
     float miss_time;
     PaddlePiece paddle_pieces[3];
     bool bricks[ROWS][COLS], bonus_bricks[ROWS][COLS];
-    Uint8 strong_hits[ROWS][COLS];
+    Uint8 strong_hits[ROWS][COLS], strong_type[ROWS][COLS];
     float brick_hit_time[ROWS][COLS];
     float scroll_offset, row_age[ROWS];
     SDL_Color row_color[ROWS];
-    int generated_rows, bonus_credit, strong_credit;
+    int generated_rows, bonus_credit, strong_credit, silvers_since_gold;
     bool reset_field_after_miss;
     int level, lives, remaining;
     Uint64 score, destroyed;
@@ -219,7 +221,8 @@ static SDL_Color generated_row_color(int level, int row_number) {
 
 static int split_interval(int level) {
     int increase = level > 1 ? (level - 1) / 4 : 0;
-    return BONUS_BRICK_INTERVAL + (increase < 30 ? increase : 30);
+    int maximum_increase = 60 - BONUS_BRICK_INTERVAL;
+    return BONUS_BRICK_INTERVAL + (increase < maximum_increase ? increase : maximum_increase);
 }
 
 static int strong_interval(int level) {
@@ -228,13 +231,26 @@ static int strong_interval(int level) {
     return interval > 20 ? interval : 20;
 }
 
+static int silvers_per_gold(int level) {
+    int silvers = level <= 20 ? 4 : 4 - (level - 20) / 20;
+    return silvers > 0 ? silvers : 0;
+}
+
+static void assign_strong_brick(Game *g, int row, int col) {
+    bool gold = g->silvers_since_gold >= silvers_per_gold(g->level);
+    if (gold) g->silvers_since_gold = 0;
+    else ++g->silvers_since_gold;
+    g->strong_type[row][col] = gold ? GOLD : SILVER;
+    g->strong_hits[row][col] = gold ? GOLD_BRICK_HITS : SILVER_BRICK_HITS;
+}
+
 static void place_specials(Game *g, int *cells, int count, int bonuses, int strong) {
     for (int i = 0; i < bonuses + strong; ++i) {
         int chosen = i + (int)(random_unit(g) * (count - i));
         int cell = cells[chosen]; cells[chosen] = cells[i]; cells[i] = cell;
         int row = cell / COLS, col = cell % COLS;
         if (i < bonuses) g->bonus_bricks[row][col] = true;
-        else g->strong_hits[row][col] = STRONG_BRICK_HITS;
+        else assign_strong_brick(g, row, col);
     }
 }
 
@@ -243,8 +259,11 @@ static SDL_Color strong_brick_color(const Game *g, int row, int col) {
     float hit_age = g->animation_time - g->brick_hit_time[row][col];
     float age = fminf(periodic_age, hit_age);
     float flash = 1 - clamp(age / 0.5f, 0, 1);
-    return (SDL_Color){255, (Uint8)SDL_roundf(216 + 39 * flash),
-                      (Uint8)SDL_roundf(64 + 191 * flash), 255};
+    SDL_Color base = g->strong_type[row][col] == GOLD ?
+        (SDL_Color){255, 216, 64, 255} : (SDL_Color){128, 128, 128, 255};
+    return (SDL_Color){(Uint8)SDL_roundf(base.r + (255 - base.r) * flash),
+                      (Uint8)SDL_roundf(base.g + (255 - base.g) * flash),
+                      (Uint8)SDL_roundf(base.b + (255 - base.b) * flash), 255};
 }
 
 static void init_field(Game *g) {
@@ -257,6 +276,7 @@ static void init_field(Game *g) {
     SDL_memset(g->bricks, 0, sizeof(g->bricks));
     SDL_memset(g->bonus_bricks, 0, sizeof(g->bonus_bricks));
     SDL_memset(g->strong_hits, 0, sizeof(g->strong_hits));
+    SDL_memset(g->strong_type, 0, sizeof(g->strong_type));
     for (int r = 0; r < ROWS; ++r) {
         g->row_age[r] = BRICK_FADE_SECONDS;
         g->row_color[r] = generated_row_color(g->level, r);
@@ -273,6 +293,7 @@ static void init_field(Game *g) {
 
 static void start_run(Game *g) {
     g->level = 1;
+    g->silvers_since_gold = 0;
     g->destroyed = g->score = 0;
     g->lives = 3;
     g->miss_time = 0;
@@ -333,6 +354,7 @@ static void add_top_row(Game *g) {
         SDL_memcpy(g->bricks[r], g->bricks[r - 1], sizeof(g->bricks[r]));
         SDL_memcpy(g->bonus_bricks[r], g->bonus_bricks[r - 1], sizeof(g->bonus_bricks[r]));
         SDL_memcpy(g->strong_hits[r], g->strong_hits[r - 1], sizeof(g->strong_hits[r]));
+        SDL_memcpy(g->strong_type[r], g->strong_type[r - 1], sizeof(g->strong_type[r]));
         SDL_memcpy(g->brick_hit_time[r], g->brick_hit_time[r - 1], sizeof(g->brick_hit_time[r]));
         g->row_age[r] = g->row_age[r - 1];
         g->row_color[r] = g->row_color[r - 1];
@@ -341,6 +363,7 @@ static void add_top_row(Game *g) {
         g->bricks[0][c] = true;
         g->bonus_bricks[0][c] = false;
         g->strong_hits[0][c] = 0;
+        g->strong_type[0][c] = NO_METAL;
         g->brick_hit_time[0][c] = -100;
     }
     g->row_age[0] = 0;
@@ -595,7 +618,10 @@ static void update_ball(Game *g, Ball *b, float dt) {
             bool destroyed = true;
             if (was_strong) {
                 g->brick_hit_time[r][c] = g->animation_time;
-                destroyed = --g->strong_hits[r][c] == 0;
+                int damage = b->shot_power >= 0.9999f ? 2 : 1;
+                int remaining_hits = g->strong_hits[r][c] - damage;
+                g->strong_hits[r][c] = (Uint8)(remaining_hits > 0 ? remaining_hits : 0);
+                destroyed = remaining_hits <= 0;
             }
             if (destroyed) {
                 g->bricks[r][c] = false;

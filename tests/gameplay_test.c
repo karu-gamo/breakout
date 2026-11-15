@@ -33,7 +33,7 @@ static void test_placement(void) {
                 bonus += g.bonus_bricks[r][c];
             }
         }
-        assert(bonus == total / 30 && g.remaining == total);
+        assert(bonus == total / 40 && g.remaining == total);
         assert(total == 200);
         assert(1 + bonus * 3 <= MAX_BALLS);
         SDL_FRect first = brick_rect(&g, 0, 0), last = brick_rect(&g, INITIAL_ROWS - 1, COLS - 1);
@@ -280,7 +280,7 @@ static void test_endless_descent(void) {
     int bonuses = 0;
     for (int row = 0; row < ROWS; ++row)
         for (int col = 0; col < COLS; ++col) bonuses += g.bonus_bricks[row][col];
-    assert(bonuses == 220 / 30);
+    assert(bonuses == 220 / 40);
     assert(BASE_DESCENT_SPEED == 8);
     assert(g.row_age[0] == 0 && !brick_solid(&g, 0));
     assert(g.bonus_bricks[1][0] == old_bonus && SDL_memcmp(&g.row_color[1], &old_color, sizeof(old_color)) == 0);
@@ -382,8 +382,8 @@ static void test_strong_bricks(void) {
     assert(strong_interval(9) == 0 && strong_interval(10) == 60);
     assert(strong_interval(14) == 60 && strong_interval(15) == 59);
     assert(strong_interval(205) == 21 && strong_interval(210) == 20 && strong_interval(500) == 20);
-    assert(split_interval(1) == 30 && split_interval(4) == 30 && split_interval(5) == 31);
-    assert(split_interval(9) == 32 && split_interval(120) == 59 && split_interval(121) == 60 && split_interval(500) == 60);
+    assert(split_interval(1) == 40 && split_interval(4) == 40 && split_interval(5) == 41);
+    assert(split_interval(9) == 42 && split_interval(80) == 59 && split_interval(81) == 60 && split_interval(500) == 60);
     const int levels[] = {1, 9, 10, 15, 60, 160};
     for (int index = 0; index < (int)SDL_arraysize(levels); ++index) {
         Game g = start(123); g.level = levels[index]; init_field(&g);
@@ -409,28 +409,38 @@ static void test_strong_bricks(void) {
         assert(strong == (interval ? 220 / interval : 0));
         assert(split == 220 / split_interval(g.level));
     }
-    for (int charged = 0; charged < 2; ++charged) {
+    for (int metal = SILVER; metal <= GOLD; ++metal) {
+      for (int charge = 0; charge < 3; ++charge) {
         Game g = start(123); clear_board(&g);
         g.level = 10; g.destroyed = 900; g.score = 90000;
-        g.bricks[0][0] = true; g.strong_hits[0][0] = 4; g.remaining = 1;
-        for (int hit = 0; hit < 4; ++hit) {
+        int durability = metal == GOLD ? 8 : 4;
+        int damage = charge == 2 ? 2 : 1;
+        int hits = durability / damage;
+        g.bricks[0][0] = true; g.strong_hits[0][0] = durability;
+        g.strong_type[0][0] = metal; g.remaining = 1;
+        for (int hit = 0; hit < hits; ++hit) {
             g.animation_time = 0.7f + hit;
             Ball b = {.active = true, .x = 70, .y = BRICK_TOP - RADIUS, .vy = 400,
-                      .shot_power = charged ? 1 : 0, .pierces = charged ? 5 : 0};
+                      .shot_power = charge == 2 ? 1 : charge == 1 ? 0.5f : 0,
+                      .pierces = charge ? 5 : 0};
             update_ball(&g, &b, (float)STEP);
-            assert(b.bounce_pending && b.pierces == (charged ? 5 : 0));
-            assert(g.strong_hits[0][0] == 3 - hit);
-            if (hit < 3) {
+            assert(b.bounce_pending && b.pierces == (charge ? 5 : 0));
+            int remaining = durability - (hit + 1) * damage;
+            assert(g.strong_hits[0][0] == remaining);
+            if (remaining > 0) {
                 assert(g.bricks[0][0] && g.destroyed == 900 && g.score == 90000 && g.remaining == 1);
+                assert(g.strong_type[0][0] == metal);
                 SDL_Color white = strong_brick_color(&g, 0, 0);
                 assert(white.r == 255 && white.g == 255 && white.b == 255);
                 update_ball(&g, &b, (float)STEP);
-                assert(g.strong_hits[0][0] == 3 - hit); /* One contact cannot count twice. */
+                assert(g.strong_hits[0][0] == remaining);
             } else assert(!g.bricks[0][0] && g.destroyed == 901 && g.remaining == 0);
         }
+      }
     }
     Game g = start(123); g.level = 10; init_field(&g);
     g.brick_hit_time[0][0] = -100;
+    g.strong_type[0][0] = GOLD;
     g.animation_time = 0;
     SDL_Color color = strong_brick_color(&g, 0, 0);
     assert(color.r == 255 && color.g == 255 && color.b == 255);
@@ -443,6 +453,33 @@ static void test_strong_bricks(void) {
     g.strong_hits[0][0] = 2; g.brick_hit_time[0][0] = 0.7f;
     add_top_row(&g);
     assert(g.strong_hits[1][0] == 2 && g.brick_hit_time[1][0] == 0.7f);
+}
+
+static void test_metal_distribution(void) {
+    const int levels[] = {10, 20, 39, 40, 60, 80, 100, 200};
+    const int ratios[] = {4, 4, 4, 3, 2, 1, 0, 0};
+    for (int i = 0; i < (int)SDL_arraysize(levels); ++i) {
+        Game g = start(123); g.level = levels[i];
+        assert(silvers_per_gold(g.level) == ratios[i]);
+        int gold = 0, silver = 0;
+        for (int block = 0; block < (ratios[i] + 1) * 3; ++block) {
+            assign_strong_brick(&g, 0, 0);
+            if (g.strong_type[0][0] == GOLD) {
+                ++gold; assert(g.strong_hits[0][0] == 8);
+            } else { ++silver; assert(g.strong_hits[0][0] == 4); }
+        }
+        assert(gold == 3 && silver == ratios[i] * 3);
+    }
+    Game g = start(123); g.animation_time = 0.75f;
+    g.brick_hit_time[0][0] = -100; g.strong_type[0][0] = SILVER;
+    SDL_Color gray = strong_brick_color(&g, 0, 0);
+    assert(gray.r == 128 && gray.g == 128 && gray.b == 128);
+    g.brick_hit_time[0][0] = g.animation_time;
+    SDL_Color white = strong_brick_color(&g, 0, 0);
+    assert(white.r == 255 && white.g == 255 && white.b == 255);
+    g.strong_type[0][0] = GOLD; g.strong_hits[0][0] = 2;
+    add_top_row(&g);
+    assert(g.strong_type[1][0] == GOLD && g.strong_hits[1][0] == 2);
 }
 
 static void test_render(void) {
@@ -529,7 +566,8 @@ static void test_render(void) {
     int px = (int)(strong_rect.x + strong_rect.w / 2), py = (int)(strong_rect.y + strong_rect.h / 2);
     render(r, &g);
     assert(SDL_ReadSurfacePixel(surface, px, py, &red, &green, &blue, &alpha));
-    assert(red == 255 && green == 216 && blue == 64);
+    SDL_Color expected_metal = strong_brick_color(&g, strong_row, strong_col);
+    assert(red == expected_metal.r && green == expected_metal.g && blue == expected_metal.b);
     if (SDL_getenv("BREAKBOUT_STRONG_CAPTURE")) SDL_SaveBMP(surface, SDL_getenv("BREAKBOUT_STRONG_CAPTURE"));
     g.animation_time = 1; render(r, &g);
     assert(SDL_ReadSurfacePixel(surface, px, py, &red, &green, &blue, &alpha));
@@ -551,6 +589,7 @@ int main(void) {
     test_block_death();
     test_level_colors();
     test_strong_bricks();
+    test_metal_distribution();
     test_render();
     puts("PASS: random bonus placement, three-ball release, impulse/gravity/recoil, multicatch, shared charge, per-ball launch/guide, last-ball loss, trails and prediction");
     return 0;
