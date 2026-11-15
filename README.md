@@ -7,7 +7,7 @@ SDL3 / C11 で作った、マウス操作の Windows 向けブロック崩しで
 次のツールをインストールしてください。
 
 - Visual Studio 2022（「C++ によるデスクトップ開発」。無料の Community または Build Tools でも可）
-- CMake 3.24 以上（インストール時に PATH へ追加）
+- CMake 3.24 以上（PATH、標準のインストール先、Visual Studio 付属版を自動検出）
 - Git for Windows（PATH へ追加）
 
 リポジトリ内の `build_windows.bat` を実行します。初回はインターネットから SDL 3.2.10 を取得するため、時間がかかります。SDL3 の手動インストールは不要です。
@@ -39,3 +39,5 @@ play_windows.bat
 - `play_windows.bat`: ビルド済みゲームの起動
 
 Linux でも CMake と C コンパイラ、および SDL3 が必要とする開発ライブラリがあれば `cmake -S . -B build`、`cmake --build build --parallel` でビルドできます。
+
+CMake が見つからない場合は、Visual Studio Installer の「変更」から「C++ によるデスクトップ開発」の「Windows 用 C++ CMake ツール」を追加するか、CMake を PATH に追加してからバッチを開き直してください。独立版の標準パスは `C:\Program Files\CMake\bin` です。
