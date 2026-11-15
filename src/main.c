@@ -16,7 +16,7 @@
 #define ROWS 5
 #define RADIUS 16.0f
 #define SOFT_COMPRESS_SECONDS 0.0325f
-#define SOFT_RECOVER_SECONDS 0.12f
+#define SOFT_RECOVER_SECONDS 0.5f
 #define PADDLE_Y 650.0f
 #define PADDLE_W 120.0f
 #define STEP (1.0 / 240.0)
@@ -598,8 +598,19 @@ static void draw_soft_ball(SDL_Renderer *r, SDL_Texture *texture, const Ball *b,
     float tangent_scale = 1 + 0.45f * squash;
     float nx = b->deforming ? b->normal_x : 1;
     float ny = b->deforming ? b->normal_y : 0;
-    x -= nx * RADIUS * (1 - normal_scale);
-    y -= ny * RADIUS * (1 - normal_scale);
+    if (b->bounce_pending) {
+        x -= nx * RADIUS * (1 - normal_scale);
+        y -= ny * RADIUS * (1 - normal_scale);
+    } else if (b->deforming) {
+        /* After release, stretch along the outgoing path and narrow across it. */
+        float magnitude = hypotf(b->bounce_vx, b->bounce_vy);
+        if (magnitude > 0) {
+            nx = b->bounce_vx / magnitude;
+            ny = b->bounce_vy / magnitude;
+        }
+        normal_scale = 1 + 0.55f * squash;
+        tangent_scale = 1 - 0.45f * squash;
+    }
     Uint8 red, green, blue, alpha;
     SDL_GetRenderDrawColor(r, &red, &green, &blue, &alpha);
     SDL_FColor tint = {1, 1, 1, alpha / 255.0f};

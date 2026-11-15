@@ -154,7 +154,7 @@ static void test_soft_bounce(void) {
         assert(!b.bounce_pending && b.deforming);
         assert(wall == 2 ? b.vy > 0 : wall == 0 ? b.vx > 0 : b.vx < 0);
         assert(fabsf(hypotf(b.vx, b.vy) - hypotf(vx, vy)) < 0.001f);
-        for (int step = 0; step < 30; ++step) update_ball(&g, &b, (float)STEP);
+        for (int step = 0; step < 130; ++step) update_ball(&g, &b, (float)STEP);
         assert(!b.deforming && squash_amount(&b) == 0);
     }
     empty_stage(&g);
@@ -253,6 +253,18 @@ static void test_render(void) {
     assert(SDL_ReadSurfacePixel(surface, 23, 400, &red, &green, &blue, &alpha));
     assert(red < 100); /* Narrower perpendicular to the wall. */
     if (SDL_getenv("BREAKBOUT_SOFT_CAPTURE")) SDL_SaveBMP(surface, SDL_getenv("BREAKBOUT_SOFT_CAPTURE"));
+    g.balls[0].x = 400; g.balls[0].y = 400;
+    g.balls[0].bounce_pending = false;
+    g.balls[0].rotation = 0;
+    render(r, &g);
+    assert(SDL_ReadSurfacePixel(surface, 420, 400, &red, &green, &blue, &alpha));
+    assert(blue > 100); /* Stretched along the outgoing horizontal direction. */
+    assert(SDL_ReadSurfacePixel(surface, 400, 420, &red, &green, &blue, &alpha));
+    assert(blue < 100); /* Thin across the outgoing direction. */
+    g.balls[0].squash_time = SOFT_COMPRESS_SECONDS + 0.25f;
+    assert(squash_amount(&g.balls[0]) > 0 && squash_amount(&g.balls[0]) < 1);
+    assert(!update_soft_bounce(&g.balls[0], 0.25f));
+    assert(!g.balls[0].deforming && squash_amount(&g.balls[0]) == 0);
     break_paddle(&g); render(r, &g);
     SDL_DestroyTexture(g.ball_texture);
     SDL_DestroyRenderer(r); SDL_DestroySurface(surface); SDL_Quit();
