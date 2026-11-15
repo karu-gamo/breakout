@@ -18,6 +18,9 @@
 #define PREVIEW_SEGMENTS 10
 #define MAX_PARTICLES 768
 #define CHARGE_SECONDS 1.0f
+#define PADDLE_HISTORY 25
+#define TRAIL_FAST_SPEED 1200.0f
+#define MISS_DURATION 0.85f
 #define PREVIEW_SAMPLES (PREVIEW_SEGMENTS + 1)
 #define PREVIEW_END_Y (PADDLE_Y - RADIUS)
 
@@ -28,6 +31,10 @@ typedef struct {
 } Particle;
 
 typedef struct {
+    float x, y, vx, vy, angle, spin;
+} PaddlePiece;
+
+typedef struct {
     Screen screen;
     float paddle, x, y, vx, vy;
     bool attached;
@@ -36,6 +43,9 @@ typedef struct {
     int pierces;
     Uint32 random_state;
     Particle particles[MAX_PARTICLES];
+    float paddle_history[PADDLE_HISTORY];
+    float miss_time;
+    PaddlePiece paddle_pieces[3];
     bool preview_active;
     float preview_x, preview_vx, preview_vy;
     bool bricks[ROWS][COLS];
@@ -48,6 +58,28 @@ static float clamp(float v, float lo, float hi) {
 
 static float speed(const Game *g) {
     return 340.0f + 25.0f * (float)(g->stage < 12 ? g->stage - 1 : 11);
+}
+
+static void reset_history(Game *g) {
+    for (int i = 0; i < PADDLE_HISTORY; ++i) g->paddle_history[i] = g->paddle;
+}
+
+static void record_paddle(Game *g) {
+    for (int i = PADDLE_HISTORY - 1; i > 0; --i)
+        g->paddle_history[i] = g->paddle_history[i - 1];
+    g->paddle_history[0] = g->paddle;
+}
+
+static int paddle_trails(const Game *g, float positions[3]) {
+    if (g->miss_time > 0 || g->screen != PLAYING) return 0;
+    float travel = 0;
+    for (int i = 1; i < PADDLE_HISTORY; ++i)
+        travel += fabsf(g->paddle_history[i] - g->paddle_history[i - 1]);
+    float velocity = travel / 0.1f;
+    int count = velocity >= TRAIL_FAST_SPEED ? 3 : velocity >= 600 ? 2 : 1;
+    for (int i = 0; i < count; ++i)
+        positions[i] = g->paddle_history[(i + 1) * (PADDLE_HISTORY - 1) / count];
+    return count;
 }
 
 static void reset_ball(Game *g) {
@@ -69,6 +101,9 @@ static SDL_FRect brick_rect(int row, int col) {
 
 static void load_stage(Game *g) {
     g->remaining = 0;
+    g->miss_time = 0;
+    g->left_down = false;
+    reset_history(g);
     SDL_memset(g->particles, 0, sizeof(g->particles));
     for (int r = 0; r < ROWS; ++r) {
         for (int c = 0; c < COLS; ++c) {
@@ -92,7 +127,7 @@ static void click(Game *g) {
         load_stage(g);
         g->screen = PLAYING;
         break;
-    case PLAYING: g->left_down = true; break;
+    case PLAYING: if (g->miss_time <= 0) g->left_down = true; break;
     case CLEAR:
         ++g->stage;
         load_stage(g);
@@ -104,10 +139,10 @@ static void click(Game *g) {
 
 static void release_ball(Game *g) {
     g->left_down = false;
-    if (g->screen != PLAYING || !g->attached) return;
+    if (g->screen != PLAYING || !g->attached || g->miss_time > 0) return;
     g->shot_power = g->charge;
     g->pierces = (int)floorf(g->charge * 5.0f + 0.0001f);
-    float launch_speed = speed(g) * (1.0f + 4.0f * g->charge);
+    float launch_speed = speed(g) * (1.0f + 1.5f * g->charge);
     g->vx = launch_speed * g->launch_ratio;
     g->vy = -sqrtf(launch_speed * launch_speed - g->vx * g->vx);
     g->attached = false;
@@ -153,9 +188,41 @@ static void update_particles(Game *g, float dt) {
     }
 }
 
+static void break_paddle(Game *g) {
+    --g->lives;
+    g->miss_time = MISS_DURATION;
+    g->left_down = false;
+    g->attached = false;
+    g->preview_active = false;
+    g->charge = 0;
+    for (int i = 0; i < 3; ++i) {
+        g->paddle_pieces[i] = (PaddlePiece){
+            g->paddle + (i - 1) * PADDLE_W / 3, PADDLE_Y + 7.5f,
+            (i - 1) * 240.0f + (i == 1 ? 35 : 0), -330.0f - i * 45,
+            0, (i == 1 ? -1 : 1) * (7.0f + i * 3)};
+    }
+}
+
 static void update(Game *g, float dt) {
     update_particles(g, dt);
     if (g->screen != PLAYING) return;
+    if (g->miss_time > 0) {
+        for (int i = 0; i < 3; ++i) {
+            PaddlePiece *p = &g->paddle_pieces[i];
+            p->x += p->vx * dt;
+            p->y += p->vy * dt;
+            p->vy += 850 * dt;
+            p->angle += p->spin * dt;
+        }
+        g->miss_time = fmaxf(0, g->miss_time - dt);
+        if (g->miss_time == 0) {
+            reset_history(g);
+            if (g->lives == 0) g->screen = GAME_OVER;
+            else reset_ball(g);
+        }
+        return;
+    }
+    record_paddle(g);
     if (g->attached) {
         g->x = g->paddle + g->attach_offset;
         if (g->left_down) {
@@ -192,6 +259,19 @@ static void update(Game *g, float dt) {
             g->x = g->paddle + g->attach_offset;
             return;
         }
+        /* The solid paddle always wins when both shapes overlap. */
+        float trails[3];
+        int count = paddle_trails(g, trails);
+        for (int i = 0; i < count; ++i) {
+            if (fabsf(hit_x - trails[i]) > PADDLE_W / 2 + RADIUS) continue;
+            float magnitude = hypotf(g->vx, g->vy);
+            float offset = clamp((hit_x - trails[i]) / (PADDLE_W / 2), -1, 1);
+            g->vx = magnitude * offset * 0.85f;
+            g->vy = -sqrtf(magnitude * magnitude - g->vx * g->vx);
+            g->y = PADDLE_Y - RADIUS;
+            g->preview_active = false;
+            return;
+        }
     }
     for (int r = 0; r < ROWS; ++r) {
         for (int c = 0; c < COLS; ++c) {
@@ -226,12 +306,7 @@ static void update(Game *g, float dt) {
             return;
         }
     }
-    if (g->y - RADIUS > HEIGHT) {
-        if (--g->lives == 0) {
-            g->screen = GAME_OVER;
-            g->left_down = false;
-        } else reset_ball(g);
-    }
+    if (g->y - RADIUS > HEIGHT) break_paddle(g);
 }
 
 typedef struct {
@@ -240,7 +315,7 @@ typedef struct {
 } BallPreview;
 
 static float preview_strength(const Game *g) {
-    if (g->screen != PLAYING || g->attached || !g->preview_active ||
+    if (g->screen != PLAYING || g->miss_time > 0 || g->attached || !g->preview_active ||
         g->vy <= 0 || g->y > PREVIEW_END_Y) return 0;
     return clamp((g->y - PREVIEW_START_Y) /
                  (PREVIEW_FULL_Y - PREVIEW_START_Y), 0, 1);
@@ -301,6 +376,24 @@ static void centered(SDL_Renderer *r, float y, const char *text, float scale) {
     SDL_SetRenderScale(r, 1, 1);
 }
 
+static void render_paddle_pieces(SDL_Renderer *r, const Game *g) {
+    const int indices[] = {0, 1, 2, 0, 2, 3};
+    for (int i = 0; i < 3; ++i) {
+        const PaddlePiece *p = &g->paddle_pieces[i];
+        SDL_Vertex vertices[4];
+        float cosine = cosf(p->angle), sine = sinf(p->angle);
+        for (int j = 0; j < 4; ++j) {
+            float x = (j == 0 || j == 3 ? -1 : 1) * PADDLE_W / 6;
+            float y = (j < 2 ? -1 : 1) * 7.5f;
+            vertices[j].position = (SDL_FPoint){p->x + x * cosine - y * sine,
+                                               p->y + x * sine + y * cosine};
+            vertices[j].color = (SDL_FColor){90 / 255.0f, 220 / 255.0f, 235 / 255.0f, 1};
+            vertices[j].tex_coord = (SDL_FPoint){0, 0};
+        }
+        SDL_RenderGeometry(r, NULL, vertices, 4, indices, 6);
+    }
+}
+
 static void render(SDL_Renderer *r, const Game *g) {
     color(r, 12, 18, 32);
     SDL_RenderClear(r);
@@ -338,25 +431,38 @@ static void render(SDL_Renderer *r, const Game *g) {
             SDL_RenderFillRect(r, &shard);
         }
         SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
-        float shake_x = 0, shake_y = 0;
-        if (g->attached && g->left_down && g->charge > 0) {
-            shake_x = sinf(g->shake_time * 105) * 4 * g->charge;
-            shake_y = sinf(g->shake_time * 137) * 2 * g->charge;
-        }
-        color(r, (Uint8)(90 + 165 * g->charge),
-                 (Uint8)(220 - 170 * g->charge), (Uint8)(235 - 185 * g->charge));
-        SDL_FRect paddle = {g->paddle - PADDLE_W / 2 + shake_x,
-                            PADDLE_Y + shake_y, PADDLE_W, 15};
-        SDL_RenderFillRect(r, &paddle);
-        if (g->shot_power > 0) color(r, 255, 200, 100);
-        else color(r, 250, 250, 245);
-        draw_ball(r, g->x + (g->attached ? shake_x : 0),
-                  g->y + (g->attached ? shake_y : 0));
-        if (g->screen == PLAYING && g->attached) {
-            char charge_text[96];
-            SDL_snprintf(charge_text, sizeof(charge_text), "POWER %d%% / HOLD LEFT - RELEASE TO FIRE",
-                         (int)SDL_roundf(g->charge * 100));
-            centered(r, 540, charge_text, 2);
+        if (g->miss_time > 0) {
+            render_paddle_pieces(r, g);
+        } else if (g->screen != GAME_OVER) {
+            float trails[3];
+            int trail_count = paddle_trails(g, trails);
+            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+            for (int i = trail_count - 1; i >= 0; --i) {
+                SDL_SetRenderDrawColor(r, 90, 220, 235, (Uint8)(85 - i * 20));
+                SDL_FRect ghost = {trails[i] - PADDLE_W / 2, PADDLE_Y, PADDLE_W, 15};
+                SDL_RenderFillRect(r, &ghost);
+            }
+            SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+            float shake_x = 0, shake_y = 0;
+            if (g->attached && g->left_down && g->charge > 0) {
+                shake_x = sinf(g->shake_time * 105) * 4 * g->charge;
+                shake_y = sinf(g->shake_time * 137) * 2 * g->charge;
+            }
+            color(r, (Uint8)(90 + 165 * g->charge),
+                     (Uint8)(220 - 170 * g->charge), (Uint8)(235 - 185 * g->charge));
+            SDL_FRect paddle = {g->paddle - PADDLE_W / 2 + shake_x,
+                                PADDLE_Y + shake_y, PADDLE_W, 15};
+            SDL_RenderFillRect(r, &paddle);
+            if (g->shot_power > 0) color(r, 255, 200, 100);
+            else color(r, 250, 250, 245);
+            draw_ball(r, g->x + (g->attached ? shake_x : 0),
+                      g->y + (g->attached ? shake_y : 0));
+            if (g->screen == PLAYING && g->attached) {
+                char charge_text[96];
+                SDL_snprintf(charge_text, sizeof(charge_text), "POWER %d%% / HOLD LEFT - RELEASE TO FIRE",
+                             (int)SDL_roundf(g->charge * 100));
+                centered(r, 540, charge_text, 2);
+            }
         }
         if (g->screen == CLEAR || g->screen == GAME_OVER) {
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
