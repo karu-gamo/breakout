@@ -12,6 +12,12 @@
 #define PADDLE_Y 650.0f
 #define PADDLE_W 120.0f
 #define STEP (1.0 / 240.0)
+/* Heights from the reference image, in the 960 x 720 logical canvas. */
+#define PREVIEW_START_Y 290.0f
+#define PREVIEW_FULL_Y 425.0f
+#define PREVIEW_SAMPLES 7
+#define PREVIEW_FRAME_SECONDS (1.0 / 60.0)
+#define PREVIEW_FRAME_STRIDE 5
 
 typedef enum { TITLE, PLAYING, CLEAR, GAME_OVER } Screen;
 typedef struct {
@@ -129,6 +135,61 @@ static void update(Game *g, float dt) {
     }
 }
 
+typedef struct {
+    float x, y;
+    Uint8 alpha;
+} BallPreview;
+
+static float preview_strength(const Game *g) {
+    if (g->screen != PLAYING || g->attached || g->vy <= 0) return 0;
+    return clamp((g->y - PREVIEW_START_Y) /
+                 (PREVIEW_FULL_Y - PREVIEW_START_Y), 0, 1);
+}
+
+static int predict_ball(const Game *g, BallPreview samples[PREVIEW_SAMPLES]) {
+    float strength = preview_strength(g);
+    if (strength <= 0) return 0;
+    /* Simulate a copy: prediction must never alter lives, bricks or score.
+       The paddle stays at its current position. Stop on bounce or loss. */
+    Game future = *g;
+    int count = 0;
+    const int steps_per_sample = (int)(PREVIEW_FRAME_STRIDE *
+                                      PREVIEW_FRAME_SECONDS / STEP + 0.5);
+    for (int i = 0; i < PREVIEW_SAMPLES; ++i) {
+        float opacity = (float)(PREVIEW_SAMPLES - 1 - i) * 0.05f;
+        samples[count++] = (BallPreview){future.x, future.y,
+            (Uint8)SDL_roundf(255.0f * opacity * strength)};
+        if (i == PREVIEW_SAMPLES - 1) break;
+        for (int step = 0; step < steps_per_sample; ++step) {
+            update(&future, (float)STEP);
+            if (future.attached || future.screen != PLAYING || future.vy <= 0)
+                return count;
+        }
+    }
+    return count;
+}
+
+static void draw_ball(SDL_Renderer *r, float x, float y) {
+    for (int row = -(int)RADIUS; row <= (int)RADIUS; ++row) {
+        float half = sqrtf(RADIUS * RADIUS - (float)(row * row));
+        SDL_RenderLine(r, x - half, y + row, x + half, y + row);
+    }
+}
+
+static void render_prediction(SDL_Renderer *r, const Game *g) {
+    BallPreview samples[PREVIEW_SAMPLES];
+    int count = predict_ball(g, samples);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    /* Far to near: 30 frames = 0%, 25 = 5%, ... 0 = 30% opacity.
+       The real ball is rendered solid on top of the zero-frame sample. */
+    for (int i = count - 1; i >= 0; --i) {
+        if (samples[i].alpha == 0) continue;
+        SDL_SetRenderDrawColor(r, 250, 250, 245, samples[i].alpha);
+        draw_ball(r, samples[i].x, samples[i].y);
+    }
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+}
+
 static void color(SDL_Renderer *r, Uint8 red, Uint8 green, Uint8 blue) {
     SDL_SetRenderDrawColor(r, red, green, blue, 255);
 }
@@ -166,14 +227,12 @@ static void render(SDL_Renderer *r, const Game *g) {
                 }
             }
         }
+        render_prediction(r, g);
         color(r, 90, 220, 235);
         SDL_FRect paddle = {g->paddle - PADDLE_W / 2, PADDLE_Y, PADDLE_W, 15};
         SDL_RenderFillRect(r, &paddle);
         color(r, 250, 250, 245);
-        for (int y = -(int)RADIUS; y <= (int)RADIUS; ++y) {
-            float half = sqrtf(RADIUS * RADIUS - (float)(y * y));
-            SDL_RenderLine(r, g->x - half, g->y + y, g->x + half, g->y + y);
-        }
+        draw_ball(r, g->x, g->y);
         if (g->screen == PLAYING && g->attached) centered(r, 540, "CLICK TO LAUNCH", 2);
         if (g->screen == CLEAR || g->screen == GAME_OVER) {
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
