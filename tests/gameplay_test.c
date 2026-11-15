@@ -484,6 +484,31 @@ static void test_metal_distribution(void) {
     assert(g.strong_type[1][0] == GOLD && g.strong_hits[1][0] == 2);
 }
 
+static void test_gravity_prediction(void) {
+    Game g = start(123);
+    Ball b = {.active = true, .gravity = true, .x = 400, .y = PREVIEW_FULL_Y,
+              .vx = 200, .vy = 100};
+    BallPreview points[PREVIEW_SAMPLES];
+    int count = predict_ball(&g, &b, points);
+    assert(count > 0 && points[count - 1].y == PREVIEW_END_Y);
+    float distance = PREVIEW_END_Y - b.y;
+    float time = gravity_fall_time(b.vy, distance);
+    assert(fabsf(b.vy * time + 0.5f * BONUS_GRAVITY * time * time - distance) < 0.001f);
+    assert(fabsf(points[count - 1].x - (b.x + b.vx * time)) < 0.001f);
+    assert(points[count - 1].alpha == 13 && !b.preview_active);
+    b.vy = BONUS_MAX_FALL_SPEED;
+    assert(fabsf(gravity_fall_time(b.vy, distance) - distance / BONUS_MAX_FALL_SPEED) < 0.00001f);
+    b.vy = BONUS_MAX_FALL_SPEED - 1;
+    time = gravity_fall_time(b.vy, distance);
+    assert(time > distance / BONUS_MAX_FALL_SPEED && time < distance / b.vy);
+    b.x = WIDTH - RADIUS - 1; b.vx = 300; b.vy = 100;
+    count = predict_ball(&g, &b, points);
+    assert(points[count - 1].x < b.x);
+    b.vy = -100; assert(predict_ball(&g, &b, points) == 0);
+    b.vy = 100; b.y = PREVIEW_START_Y; assert(predict_ball(&g, &b, points) == 0);
+    b.y = PREVIEW_FULL_Y; b.attached = true; assert(predict_ball(&g, &b, points) == 0);
+}
+
 static void test_render(void) {
     assert(SDL_Init(SDL_INIT_VIDEO));
     SDL_Surface *surface = SDL_CreateSurface(WIDTH, HEIGHT, SDL_PIXELFORMAT_RGBA32);
@@ -592,6 +617,7 @@ int main(void) {
     test_level_colors();
     test_strong_bricks();
     test_metal_distribution();
+    test_gravity_prediction();
     test_render();
     puts("PASS: random bonus placement, three-ball release, impulse/gravity/recoil, multicatch, shared charge, per-ball launch/guide, last-ball loss, trails and prediction");
     return 0;

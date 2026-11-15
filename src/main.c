@@ -712,17 +712,31 @@ typedef struct {
 } BallPreview;
 
 static float preview_strength(const Game *g, const Ball *b) {
-    if (g->screen != PLAYING || g->miss_time > 0 || !b->active || b->gravity || b->attached || !b->preview_active ||
+    if (g->screen != PLAYING || g->miss_time > 0 || !b->active || b->attached || (!b->gravity && !b->preview_active) ||
         b->vy <= 0 || b->y > PREVIEW_END_Y) return 0;
     return clamp((b->y - PREVIEW_START_Y) /
                  (PREVIEW_FULL_Y - PREVIEW_START_Y), 0, 1);
 }
 
+static float gravity_fall_time(float velocity, float distance) {
+    velocity = clamp(velocity, 0, BONUS_MAX_FALL_SPEED);
+    float cap_time = (BONUS_MAX_FALL_SPEED - velocity) / BONUS_GRAVITY;
+    float cap_distance = velocity * cap_time + 0.5f * BONUS_GRAVITY * cap_time * cap_time;
+    if (distance > cap_distance)
+        return cap_time + (distance - cap_distance) / BONUS_MAX_FALL_SPEED;
+    /* Stable positive root of d = v*t + a*t*t/2. */
+    return 2 * distance / (velocity + sqrtf(velocity * velocity + 2 * BONUS_GRAVITY * distance));
+}
+
 static int predict_ball(const Game *g, const Ball *b, BallPreview samples[PREVIEW_SAMPLES]) {
     float strength = preview_strength(g, b);
     if (strength <= 0) return 0;
-    /* Freeze the trajectory at the yellow-line crossing. Fold horizontal
-       travel into the arena to include any number of side-wall reflections. */
+    /* Normal balls retain the yellow-line snapshot. Gravity balls use their
+       current velocity, including acceleration and terminal speed. */
+    float origin_x = b->gravity ? b->x : b->preview_x;
+    float origin_y = b->gravity ? b->y : PREVIEW_START_Y;
+    float vx = b->gravity ? b->vx : b->preview_vx;
+    float vy = b->gravity ? b->vy : b->preview_vy;
     const float span = WIDTH - 2 * RADIUS;
     const float distance = PREVIEW_END_Y - PREVIEW_START_Y;
     int count = 0;
@@ -730,8 +744,8 @@ static int predict_ball(const Game *g, const Ball *b, BallPreview samples[PREVIE
         float fraction = (float)i / PREVIEW_SEGMENTS;
         float y = PREVIEW_START_Y + distance * fraction;
         if (y <= b->y) continue; /* Never leave prediction dots behind the ball. */
-        float time = (y - PREVIEW_START_Y) / b->preview_vy;
-        float phase = fmodf(b->preview_x - RADIUS + b->preview_vx * time,
+        float time = b->gravity ? gravity_fall_time(vy, y - origin_y) : (y - origin_y) / vy;
+        float phase = fmodf(origin_x - RADIUS + vx * time,
                             2 * span);
         if (phase < 0) phase += 2 * span;
         float x = RADIUS + (phase <= span ? phase : 2 * span - phase);
