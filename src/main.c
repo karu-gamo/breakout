@@ -33,7 +33,7 @@
 #define PADDLE_HISTORY 49
 #define TRAIL_FAST_SPEED 1200.0f
 #define MISS_DURATION 0.85f
-#define MAX_PADDLE_SCALE 3.0f
+#define MAX_PADDLE_SCALE 2.0f
 #define PREVIEW_SAMPLES (PREVIEW_SEGMENTS + 1)
 #define PREVIEW_END_Y (PADDLE_Y - RADIUS)
 
@@ -702,7 +702,7 @@ static void render(SDL_Renderer *r, const Game *g) {
         centered(r, 330, "CLICK TO START", 2);
         centered(r, 395, "MOVE MOUSE TO CONTROL THE PADDLE", 2);
         centered(r, 430, "HOLD LEFT BUTTON TO CHARGE / RELEASE TO FIRE", 2);
-        centered(r, 485, "MOVE FASTER TO WIDEN THE PADDLE (UP TO 3X)", 2);
+        centered(r, 485, "MOVE FASTER TO WIDEN THE PADDLE (UP TO 2X)", 2);
         centered(r, 560, "ESC: QUIT", 1.5f);
     } else {
         char hud[128];

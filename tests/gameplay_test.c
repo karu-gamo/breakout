@@ -210,7 +210,7 @@ static void test_speed_width(void) {
     assert(g.paddle_width == PADDLE_W);
     g.paddle += 200;
     update(&g, (float)STEP);
-    assert(g.paddle_width == PADDLE_W * 3);
+    assert(g.paddle_width == PADDLE_W * 2);
     assert(g.width_history[0] == g.paddle_width && g.width_history[1] == PADDLE_W);
     float wide = g.paddle_width;
     update(&g, (float)STEP);
@@ -222,12 +222,12 @@ static void test_speed_width(void) {
     g.paddle = WIDTH; update(&g, (float)STEP);
     assert(g.paddle == WIDTH && g.paddle + g.paddle_width / 2 > WIDTH);
     empty_stage(&g);
-    g.paddle = 480; g.paddle_width = 360; reset_history(&g);
-    g.paddle_width = 360;
-    Ball b = {.active = true, .x = 630, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
+    g.paddle = 480; g.paddle_width = 240; reset_history(&g);
+    g.paddle_width = 240;
+    Ball b = {.active = true, .x = 580, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
     update_ball(&g, &b, (float)STEP);
     assert(b.attached && b.attach_offset > PADDLE_W / 2);
-    assert(fabsf(b.base_launch_angle - bounce_offset_angle(150, 360)) < 0.001f);
+    assert(fabsf(b.base_launch_angle - bounce_offset_angle(100, 240)) < 0.001f);
     g.balls[0] = b;
     g.paddle_width = PADDLE_W;
     update_ball(&g, &g.balls[0], (float)STEP);
@@ -236,9 +236,9 @@ static void test_speed_width(void) {
     g.paddle = 600;
     for (int i = 0; i < PADDLE_HISTORY; ++i) {
         g.paddle_history[i] = 200;
-        g.width_history[i] = 360;
+        g.width_history[i] = 240;
     }
-    b = (Ball){.active = true, .x = 350, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
+    b = (Ball){.active = true, .x = 300, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
     update_ball(&g, &b, (float)STEP);
     assert(!b.attached && b.vy < 0); /* Only the old, extended trail reaches this point. */
 }
