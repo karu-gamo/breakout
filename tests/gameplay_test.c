@@ -116,7 +116,7 @@ static void test_trails_and_prediction(void) {
     Game g = start(123);
     for (int i = 0; i < PADDLE_HISTORY; ++i) g.paddle_history[i] = 700 - i * 5.0f;
     float trails[MAX_TRAILS];
-    assert(paddle_trails(&g, trails) == 6 && trails[5] == 460);
+    assert(paddle_trails(&g, trails) == 12 && trails[11] == 460);
     g.paddle = 700; g.paddle_angle = 0;
     Ball b = {.active = true, .x = 465, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
     update_ball(&g, &b, (float)STEP);
