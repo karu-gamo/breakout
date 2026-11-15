@@ -15,7 +15,14 @@
 #define BASE_COLS 10
 #define BASE_ROWS 5
 #define COLS (BASE_COLS * 2)
-#define ROWS (BASE_ROWS * 2)
+#define INITIAL_ROWS (BASE_ROWS * 2)
+#define ROWS 40
+#define BRICK_TOP 100.0f
+#define BRICK_PITCH 16.0f
+#define BRICK_H 12.5f
+#define DESCENT_LINE_Y 260.0f
+#define BASE_DESCENT_SPEED 4.0f
+#define BRICK_FADE_SECONDS 0.5f
 #define RADIUS 16.0f
 #define SOFT_COMPRESS_SECONDS 0.0325f
 #define SOFT_RECOVER_SECONDS 0.5f
@@ -41,7 +48,7 @@
 #define PREVIEW_SAMPLES (PREVIEW_SEGMENTS + 1)
 #define PREVIEW_END_Y (PADDLE_Y - RADIUS)
 
-typedef enum { TITLE, PLAYING, CLEAR, GAME_OVER } Screen;
+typedef enum { TITLE, PLAYING, GAME_OVER } Screen;
 typedef struct {
     float x, y, vx, vy, life, lifetime, size;
     Uint8 red, green, blue;
@@ -76,7 +83,12 @@ typedef struct {
     float miss_time;
     PaddlePiece paddle_pieces[3];
     bool bricks[ROWS][COLS], bonus_bricks[ROWS][COLS];
-    int stage, lives, remaining, score;
+    float scroll_offset, row_age[ROWS];
+    SDL_Color row_color[ROWS];
+    int generated_rows, bonus_credit;
+    bool reset_field_after_miss;
+    int level, lives, remaining;
+    Uint64 score, destroyed;
 } Game;
 
 static SDL_Texture *load_ball_texture(SDL_Renderer *renderer) {
@@ -104,7 +116,8 @@ static float clamp(float v, float lo, float hi) {
 }
 
 static float speed(const Game *g) {
-    return 340.0f + 25.0f * (float)(g->stage < 12 ? g->stage - 1 : 11);
+    (void)g;
+    return 340.0f;
 }
 
 static void reset_history(Game *g) {
@@ -176,63 +189,144 @@ static void reset_ball(const Game *g, Ball *b) {
     b->vy = -sqrtf(speed(g) * speed(g) - b->vx * b->vx);
 }
 
-static SDL_FRect brick_rect(int row, int col) {
-    return (SDL_FRect){42.0f + col * 44.0f, 100.0f + row * 16.0f, 41, 12.5f};
+static SDL_FRect brick_rect(const Game *g, int row, int col) {
+    return (SDL_FRect){42.0f + col * 44.0f, BRICK_TOP + row * BRICK_PITCH + g->scroll_offset, 41, BRICK_H};
 }
 
 static float random_unit(Game *g);
 
-static void load_stage(Game *g) {
-    g->remaining = 0;
-    g->miss_time = 0;
-    g->left_down = false;
-    reset_history(g);
-    SDL_memset(g->particles, 0, sizeof(g->particles));
-    for (int r = 0; r < ROWS; ++r) {
-        for (int c = 0; c < COLS; ++c) {
-            /* Three simple layouts repeat as the ball gradually gets faster. */
-            int base_row = r / 2, base_col = c / 2;
-            bool present = (g->stage % 3 == 1) ||
-                (g->stage % 3 == 2 ? (base_row + base_col) % 2 == 0 || base_row == 0 :
-                 base_col >= base_row && base_col < BASE_COLS - base_row);
-            g->bricks[r][c] = present;
-            g->remaining += present;
-        }
-    }
-    SDL_memset(g->balls, 0, sizeof(g->balls));
+/* A shuffled pastel sequence, fixed across runs so level bands are recognizable. */
+static const SDL_Color level_palette[] = {
+    {232, 139, 159, 255}, {157, 165, 224, 255}, {132, 201, 182, 255},
+    {236, 177, 135, 255}, {192, 155, 218, 255}, {132, 190, 218, 255},
+    {225, 208, 142, 255}, {166, 207, 151, 255}, {214, 153, 182, 255},
+    {151, 179, 217, 255}
+};
+
+static SDL_Color generated_row_color(int level, int row_number) {
+    int count = (int)SDL_arraysize(level_palette);
+    int band = (level / 10) % count;
+    SDL_Color start = level_palette[band], end = level_palette[(band + 1) % count];
+    float t = (row_number % 10) / 9.0f;
+    return (SDL_Color){(Uint8)SDL_roundf(start.r + (end.r - start.r) * t),
+                       (Uint8)SDL_roundf(start.g + (end.g - start.g) * t),
+                       (Uint8)SDL_roundf(start.b + (end.b - start.b) * t), 255};
+}
+
+static void init_field(Game *g) {
+    g->remaining = INITIAL_ROWS * COLS;
+    g->scroll_offset = 0;
+    g->generated_rows = INITIAL_ROWS;
+    g->bonus_credit = g->remaining % 11;
+    SDL_memset(g->bricks, 0, sizeof(g->bricks));
     SDL_memset(g->bonus_bricks, 0, sizeof(g->bonus_bricks));
-    int cells[ROWS * COLS], count = 0;
-    for (int r = 0; r < ROWS; ++r)
-        for (int c = 0; c < COLS; ++c)
-            if (g->bricks[r][c]) cells[count++] = r * COLS + c;
-    /* Replace one in each group of 11: ten ordinary bricks per bonus brick. */
-    int bonuses = count / 11;
-    for (int i = 0; i < bonuses; ++i) {
-        int chosen = i + (int)(random_unit(g) * (count - i));
+    for (int r = 0; r < ROWS; ++r) {
+        g->row_age[r] = BRICK_FADE_SECONDS;
+        g->row_color[r] = generated_row_color(g->level, r);
+        for (int c = 0; c < COLS; ++c) g->bricks[r][c] = r < INITIAL_ROWS;
+    }
+    int cells[INITIAL_ROWS * COLS];
+    for (int i = 0; i < INITIAL_ROWS * COLS; ++i) cells[i] = i;
+    for (int i = 0; i < g->remaining / 11; ++i) {
+        int chosen = i + (int)(random_unit(g) * (INITIAL_ROWS * COLS - i));
         int cell = cells[chosen]; cells[chosen] = cells[i]; cells[i] = cell;
         g->bonus_bricks[cell / COLS][cell % COLS] = true;
     }
+}
+
+static void start_run(Game *g) {
+    g->level = 1;
+    g->destroyed = g->score = 0;
+    g->lives = 3;
+    g->miss_time = 0;
+    g->reset_field_after_miss = false;
+    g->left_down = false;
     g->charge = 0;
+    reset_history(g);
+    SDL_memset(g->particles, 0, sizeof(g->particles));
+    SDL_memset(g->balls, 0, sizeof(g->balls));
+    init_field(g);
     reset_ball(g, &g->balls[0]);
 }
 
 static void click(Game *g) {
     switch (g->screen) {
     case TITLE:
-        g->stage = 1;
-        g->lives = 3;
-        g->score = 0;
-        load_stage(g);
+        start_run(g);
         g->screen = PLAYING;
         break;
     case PLAYING: if (g->miss_time <= 0) g->left_down = true; break;
-    case CLEAR:
-        ++g->stage;
-        load_stage(g);
-        g->screen = PLAYING;
-        break;
     case GAME_OVER: g->screen = TITLE; break;
     }
+}
+
+static bool brick_solid(const Game *g, int row) {
+    /* At exactly 50% opacity, it is still non-solid. */
+    return g->row_age[row] > BRICK_FADE_SECONDS * 0.5f;
+}
+
+static float descent_speed(const Game *g) {
+    float multiplier = 4;
+    for (int r = 0; r < ROWS && multiplier > 1; ++r) {
+        if (brick_rect(g, r, 0).y + BRICK_H <= DESCENT_LINE_Y) continue;
+        for (int c = 0; c < COLS; ++c) {
+            if (g->bricks[r][c]) { multiplier = 1; break; }
+        }
+    }
+    return BASE_DESCENT_SPEED * (1 + 0.25f * (g->level / 10)) * multiplier;
+}
+
+static bool field_threatens_paddle(const Game *g) {
+    for (int r = 0; r < ROWS; ++r) {
+        if (!brick_solid(g, r)) continue;
+        for (int c = 0; c < COLS; ++c) {
+            if (!g->bricks[r][c]) continue;
+            SDL_FRect block = brick_rect(g, r, c);
+            if (block.y + block.h > PADDLE_Y + 15) return true;
+            if (block.y + block.h >= PADDLE_Y && block.y <= PADDLE_Y + 15 &&
+                block.x + block.w >= g->paddle - g->paddle_width / 2 &&
+                block.x <= g->paddle + g->paddle_width / 2) return true;
+        }
+    }
+    return false;
+}
+
+static void add_top_row(Game *g) {
+    for (int r = ROWS - 1; r > 0; --r) {
+        SDL_memcpy(g->bricks[r], g->bricks[r - 1], sizeof(g->bricks[r]));
+        SDL_memcpy(g->bonus_bricks[r], g->bonus_bricks[r - 1], sizeof(g->bonus_bricks[r]));
+        g->row_age[r] = g->row_age[r - 1];
+        g->row_color[r] = g->row_color[r - 1];
+    }
+    for (int c = 0; c < COLS; ++c) {
+        g->bricks[0][c] = true;
+        g->bonus_bricks[0][c] = false;
+    }
+    g->row_age[0] = 0;
+    g->row_color[0] = generated_row_color(g->level, g->generated_rows++);
+    int bonus_count = (g->bonus_credit + COLS) / 11;
+    g->bonus_credit = (g->bonus_credit + COLS) % 11;
+    int cells[COLS];
+    for (int c = 0; c < COLS; ++c) cells[c] = c;
+    for (int i = 0; i < bonus_count; ++i) {
+        int chosen = i + (int)(random_unit(g) * (COLS - i));
+        int cell = cells[chosen]; cells[chosen] = cells[i]; cells[i] = cell;
+        g->bonus_bricks[0][cell] = true;
+    }
+    g->remaining += COLS;
+}
+
+static bool update_field(Game *g, float dt) {
+    for (int r = 0; r < ROWS; ++r)
+        g->row_age[r] = fminf(BRICK_FADE_SECONDS, g->row_age[r] + dt);
+    g->scroll_offset += descent_speed(g) * dt;
+    /* Lower rows cannot reach storage limits before crossing the death line. */
+    if (field_threatens_paddle(g)) return true;
+    while (g->scroll_offset >= BRICK_PITCH) {
+        g->scroll_offset -= BRICK_PITCH;
+        add_top_row(g);
+    }
+    return field_threatens_paddle(g);
 }
 
 static bool any_attached(const Game *g) {
@@ -279,7 +373,7 @@ static float random_unit(Game *g) {
 }
 
 static void free_bonus_balls(Game *g, const Ball *impact, int row, int col) {
-    SDL_FRect block = brick_rect(row, col);
+    SDL_FRect block = brick_rect(g, row, col);
     float impulse = clamp(hypotf(impact->vx, impact->vy) * 0.65f, 160, 1100);
     int emitted = 0;
     for (int slot = 0; slot < MAX_BALLS && emitted < 3; ++slot) {
@@ -296,7 +390,7 @@ static void free_bonus_balls(Game *g, const Ball *impact, int row, int col) {
 }
 
 static void shatter(Game *g, const Ball *b, int row, int col) {
-    SDL_FRect rect = brick_rect(row, col);
+    SDL_FRect rect = brick_rect(g, row, col);
     int slot = 0;
     for (int i = 0; i < 24; ++i) {
         while (slot < MAX_PARTICLES && g->particles[slot].life > 0) ++slot;
@@ -310,9 +404,9 @@ static void shatter(Game *g, const Ball *b, int row, int col) {
         p.vy = -100 - random_unit(g) * 230 + b->vy * 0.12f;
         p.life = p.lifetime = lifetime;
         p.size = 3 + random_unit(g) * 5;
-        p.red = (Uint8)(245 - (row / 2) * 25);
-        p.green = (Uint8)(100 + (row / 2) * 25);
-        p.blue = (Uint8)(100 + (row / 2) * 30);
+        p.red = g->row_color[row].r;
+        p.green = g->row_color[row].g;
+        p.blue = g->row_color[row].b;
         g->particles[slot++] = p;
     }
 }
@@ -451,8 +545,8 @@ static void update_ball(Game *g, Ball *b, float dt) {
     }
     for (int r = 0; r < ROWS; ++r) {
         for (int c = 0; c < COLS; ++c) {
-            if (!g->bricks[r][c]) continue;
-            SDL_FRect rect = brick_rect(r, c);
+            if (!g->bricks[r][c] || !brick_solid(g, r)) continue;
+            SDL_FRect rect = brick_rect(g, r, c);
             float nx = clamp(b->x, rect.x, rect.x + rect.w);
             float ny = clamp(b->y, rect.y, rect.y + rect.h);
             float dx = b->x - nx, dy = b->y - ny;
@@ -463,14 +557,10 @@ static void update_ball(Game *g, Ball *b, float dt) {
                 free_bonus_balls(g, b, r, c);
             }
             g->score += 100;
+            ++g->destroyed;
+            g->level = 1 + (int)(g->destroyed / 100);
             --g->remaining;
             if (b->shot_power > 0) shatter(g, b, r, c);
-            if (g->remaining == 0) {
-                start_spin(b, -b->vx, -b->vy);
-                g->screen = CLEAR;
-                g->left_down = false;
-                return;
-            }
             if (b->pierces > 0) {
                 start_spin(b, -b->vx, -b->vy);
                 --b->pierces;
@@ -520,11 +610,20 @@ static void update(Game *g, float dt) {
         if (g->miss_time == 0) {
             reset_history(g);
             if (g->lives == 0) g->screen = GAME_OVER;
-            else reset_ball(g, &g->balls[0]);
+            else {
+                if (g->reset_field_after_miss) init_field(g);
+                reset_ball(g, &g->balls[0]);
+            }
+            g->reset_field_after_miss = false;
         }
         return;
     }
     record_paddle(g);
+    if (update_field(g, dt)) {
+        g->reset_field_after_miss = true;
+        break_paddle(g);
+        return;
+    }
     if (any_attached(g) && g->left_down) {
         g->charge = clamp(g->charge + dt / CHARGE_SECONDS, 0, 1);
         g->shake_time += dt;
@@ -708,35 +807,40 @@ static void render(SDL_Renderer *r, const Game *g) {
         centered(r, 395, "MOVE MOUSE TO CONTROL THE PADDLE", 2);
         centered(r, 430, "HOLD LEFT BUTTON TO CHARGE / RELEASE TO FIRE", 2);
         centered(r, 485, "MOVE FASTER TO WIDEN THE PADDLE (UP TO 2X)", 2);
-        centered(r, 560, "ESC: QUIT", 1.5f);
+        centered(r, 535, "ENDLESS MODE - KEEP THE BLOCKS AWAY", 1.5f);
+        centered(r, 580, "ESC: QUIT", 1.5f);
     } else {
         char hud[128];
-        SDL_snprintf(hud, sizeof(hud), "STAGE %d   LIVES %d   BALLS %d   SCORE %d",
-                     g->stage, g->lives, ball_count(g), g->score);
+        SDL_snprintf(hud, sizeof(hud), "LEVEL %d   LIVES %d   BALLS %d   SCORE %llu",
+                     g->level, g->lives, ball_count(g), (unsigned long long)g->score);
         centered(r, 24, hud, 2);
         color(r, 40, 55, 78);
         SDL_RenderLine(r, 0, 59, WIDTH, 59);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
         for (int row = 0; row < ROWS; ++row) {
-            color(r, (Uint8)(245 - (row / 2) * 25), (Uint8)(100 + (row / 2) * 25), (Uint8)(100 + (row / 2) * 30));
+            Uint8 alpha = (Uint8)SDL_roundf(255 * clamp(g->row_age[row] / BRICK_FADE_SECONDS, 0, 1));
+            Uint8 red = g->row_color[row].r;
+            Uint8 green = g->row_color[row].g;
+            Uint8 blue = g->row_color[row].b;
             for (int col = 0; col < COLS; ++col) {
-                if (g->bricks[row][col]) {
-                    SDL_FRect rect = brick_rect(row, col);
-                    SDL_RenderFillRect(r, &rect);
-                    if (g->bonus_bricks[row][col]) {
-                        color(r, 255, 235, 130);
-                        SDL_RenderRect(r, &rect);
-                        for (int ball = 0; ball < 3; ++ball) {
-                            float phase = g->animation_time * (13 + ball * 3) + row * 7 + col * 3 + ball * 2;
-                            float icon_radius = 2.5f;
-                            float x = rect.x + rect.w / 2 + sinf(phase) * (rect.w / 2 - icon_radius - 1);
-                            float y = rect.y + rect.h / 2 + sinf(phase * 1.7f + ball) * (rect.h / 2 - icon_radius - 1);
-                            draw_ball(r, g->ball_texture, x, y, icon_radius);
-                        }
-                        color(r, (Uint8)(245 - (row / 2) * 25), (Uint8)(100 + (row / 2) * 25), (Uint8)(100 + (row / 2) * 30));
+                if (!g->bricks[row][col]) continue;
+                SDL_FRect rect = brick_rect(g, row, col);
+                SDL_SetRenderDrawColor(r, red, green, blue, alpha);
+                SDL_RenderFillRect(r, &rect);
+                if (g->bonus_bricks[row][col]) {
+                    SDL_SetRenderDrawColor(r, 255, 235, 130, alpha);
+                    SDL_RenderRect(r, &rect);
+                    for (int ball = 0; ball < 3; ++ball) {
+                        float phase = g->animation_time * (13 + ball * 3) + row * 7 + col * 3 + ball * 2;
+                        float radius = 2.5f;
+                        float x = rect.x + rect.w / 2 + sinf(phase) * (rect.w / 2 - radius - 1);
+                        float y = rect.y + rect.h / 2 + sinf(phase * 1.7f + ball) * (rect.h / 2 - radius - 1);
+                        draw_ball(r, g->ball_texture, x, y, radius);
                     }
                 }
             }
         }
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
         for (int i = 0; i < MAX_BALLS; ++i)
             render_prediction(r, g, &g->balls[i]);
         SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
@@ -784,15 +888,15 @@ static void render(SDL_Renderer *r, const Game *g) {
                 centered(r, 540, charge_text, 2);
             }
         }
-        if (g->screen == CLEAR || g->screen == GAME_OVER) {
+        if (g->screen == GAME_OVER) {
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(r, 8, 12, 24, 230);
             SDL_FRect panel = {100, 285, 760, 155};
             SDL_RenderFillRect(r, &panel);
             SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
             color(r, 250, 250, 245);
-            centered(r, 315, g->screen == CLEAR ? "STAGE CLEAR!" : "GAME OVER", 3);
-            centered(r, 385, g->screen == CLEAR ? "CLICK FOR NEXT STAGE" : "CLICK TO RETURN TO TITLE", 2);
+            centered(r, 315, "GAME OVER", 3);
+            centered(r, 385, "CLICK TO RETURN TO TITLE", 2);
         }
     }
     SDL_RenderPresent(r);

@@ -12,7 +12,7 @@ static Game start(Uint32 seed) {
     return g;
 }
 
-static void empty_stage(Game *g) {
+static void empty_field(Game *g) {
     SDL_memset(g->bricks, 0, sizeof(g->bricks));
     SDL_memset(g->bonus_bricks, 0, sizeof(g->bonus_bricks));
     g->bricks[4][9] = true;
@@ -22,9 +22,8 @@ static void empty_stage(Game *g) {
 static void test_placement(void) {
     Game g = start(123), other = start(321);
     assert(SDL_memcmp(g.bonus_bricks, other.bonus_bricks, sizeof(g.bonus_bricks)) != 0);
-    for (int stage = 1; stage <= 6; ++stage) {
-        g.stage = stage;
-        load_stage(&g);
+    for (int run = 0; run < 6; ++run) {
+        init_field(&g);
         int total = 0, bonus = 0;
         for (int r = 0; r < ROWS; ++r) {
             for (int c = 0; c < COLS; ++c) {
@@ -34,9 +33,9 @@ static void test_placement(void) {
             }
         }
         assert(bonus == total / 11 && g.remaining == total);
-        assert(total == (stage % 3 == 1 ? 200 : 120));
+        assert(total == 200);
         assert(1 + bonus * 3 <= MAX_BALLS);
-        SDL_FRect first = brick_rect(0, 0), last = brick_rect(ROWS - 1, COLS - 1);
+        SDL_FRect first = brick_rect(&g, 0, 0), last = brick_rect(&g, INITIAL_ROWS - 1, COLS - 1);
         assert(first.w == 41 && first.h == 12.5f);
         assert(first.w * first.h == 82 * 25 / 4.0f);
         assert(last.x + last.w < WIDTH && last.y + last.h < PREVIEW_START_Y);
@@ -46,7 +45,7 @@ static void test_placement(void) {
 
 static void test_release_and_gravity(void) {
     Game g = start(123);
-    empty_stage(&g);
+    empty_field(&g);
     g.bricks[0][0] = g.bonus_bricks[0][0] = true;
     ++g.remaining;
     g.balls[0] = (Ball){.active = true, .x = 70, .y = 92, .vy = 340};
@@ -73,7 +72,7 @@ static void test_release_and_gravity(void) {
 
     float recoil[2];
     for (int i = 0; i < 2; ++i) {
-        empty_stage(&g);
+        empty_field(&g);
         g.bricks[1][0] = true; ++g.remaining;
         Ball b = {.active = true, .gravity = true, .x = 70, .y = 124, .vy = i ? 1000 : 500};
         update_ball(&g, &b, (float)STEP);
@@ -88,7 +87,7 @@ static void test_release_and_gravity(void) {
 
 static void test_multicatch_and_charge(void) {
     Game g = start(123);
-    empty_stage(&g);
+    empty_field(&g);
     for (int i = 0; i < 3; ++i) {
         g.balls[i] = (Ball){.active = true, .gravity = true,
             .x = g.paddle + (i - 1) * 30, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
@@ -149,7 +148,7 @@ static void test_trails_and_prediction(void) {
 static void test_soft_bounce(void) {
     assert(RADIUS == 16);
     Game g = start(123);
-    empty_stage(&g);
+    empty_field(&g);
     const float velocities[3][2] = {{-500, 120}, {500, 120}, {100, -500}};
     for (int wall = 0; wall < 3; ++wall) {
         Ball b = {.active = true, .x = wall == 0 ? RADIUS : wall == 1 ? WIDTH - RADIUS : 400,
@@ -168,14 +167,14 @@ static void test_soft_bounce(void) {
         for (int step = 0; step < 130; ++step) update_ball(&g, &b, (float)STEP);
         assert(!b.deforming && squash_amount(&b) == 0);
     }
-    empty_stage(&g);
+    empty_field(&g);
     g.bricks[0][0] = true; ++g.remaining;
     Ball b = {.active = true, .x = 70, .y = 100 - RADIUS, .vy = 400};
     update_ball(&g, &b, (float)STEP);
     assert(b.bounce_pending && b.vy == 400 && !g.bricks[0][0] && g.score == 100);
     for (int i = 0; i < 10; ++i) update_ball(&g, &b, (float)STEP);
     assert(b.vy == -400 && g.score == 100);
-    empty_stage(&g);
+    empty_field(&g);
     g.bricks[0][0] = true; ++g.remaining;
     b = (Ball){.active = true, .x = 70, .y = 100 - RADIUS, .vy = 400, .pierces = 5};
     update_ball(&g, &b, (float)STEP);
@@ -232,7 +231,7 @@ static void test_speed_width(void) {
     assert(g.paddle == 0 && g.paddle - g.paddle_width / 2 < 0);
     g.paddle = WIDTH; update(&g, (float)STEP);
     assert(g.paddle == WIDTH && g.paddle + g.paddle_width / 2 > WIDTH);
-    empty_stage(&g);
+    empty_field(&g);
     g.paddle = 480; g.paddle_width = 240; reset_history(&g);
     g.paddle_width = 240;
     Ball b = {.active = true, .x = 580, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
@@ -252,6 +251,124 @@ static void test_speed_width(void) {
     b = (Ball){.active = true, .x = 300, .y = PADDLE_Y - RADIUS - 1, .vy = 600};
     update_ball(&g, &b, (float)STEP);
     assert(!b.attached && b.vy < 0); /* Only the old, extended trail reaches this point. */
+}
+
+static void clear_board(Game *g) {
+    SDL_memset(g->bricks, 0, sizeof(g->bricks));
+    SDL_memset(g->bonus_bricks, 0, sizeof(g->bonus_bricks));
+    g->remaining = 0;
+    g->scroll_offset = 0;
+    for (int row = 0; row < ROWS; ++row) g->row_age[row] = BRICK_FADE_SECONDS;
+}
+
+static void test_endless_descent(void) {
+    Game g = start(123);
+    assert(g.level == 1 && descent_speed(&g) == BASE_DESCENT_SPEED * 4);
+    g.scroll_offset = 4;
+    assert(descent_speed(&g) == BASE_DESCENT_SPEED);
+    for (int col = 0; col < COLS; ++col) { g.bricks[9][col] = false; --g.remaining; }
+    assert(descent_speed(&g) == BASE_DESCENT_SPEED * 4);
+    init_field(&g);
+    g.scroll_offset = BRICK_PITCH - 0.01f;
+    float old_y = brick_rect(&g, 0, 0).y;
+    bool old_bonus = g.bonus_bricks[0][0];
+    SDL_Color old_color = g.row_color[0];
+    assert(!update_field(&g, (float)STEP));
+    assert(g.generated_rows == INITIAL_ROWS + 1 && g.remaining == 220);
+    assert(g.row_age[0] == 0 && !brick_solid(&g, 0));
+    assert(g.bonus_bricks[1][0] == old_bonus && SDL_memcmp(&g.row_color[1], &old_color, sizeof(old_color)) == 0);
+    assert(fabsf(brick_rect(&g, 1, 0).y - old_y - BASE_DESCENT_SPEED * (float)STEP) < 0.001f);
+    g.row_age[0] = 0.25f;
+    g.bonus_bricks[0][0] = false;
+    Ball b = {.active = true, .x = 70, .y = 100 - RADIUS, .vy = 200};
+    update_ball(&g, &b, (float)STEP);
+    assert(g.bricks[0][0] && !b.bounce_pending);
+    g.row_age[0] = 0.2501f;
+    b = (Ball){.active = true, .x = 70, .y = 100 - RADIUS, .vy = 200};
+    update_ball(&g, &b, (float)STEP);
+    assert(!g.bricks[0][0] && b.bounce_pending);
+    clear_board(&g);
+    for (int i = 0; i < 900; ++i) {
+        g.bricks[0][0] = true; g.remaining = 1;
+        b = (Ball){.active = true, .x = 70, .y = 100 - RADIUS, .vy = 200};
+        update_ball(&g, &b, (float)STEP);
+        assert(g.screen == PLAYING && g.remaining == 0);
+        assert(g.level == 1 + (int)(g.destroyed / 100));
+    }
+    assert(g.level == 10 && g.destroyed == 901);
+    float level_ten = descent_speed(&g);
+    g.level = 9; assert(descent_speed(&g) < level_ten);
+    g.level = 19; assert(descent_speed(&g) == level_ten);
+    g.level = 20; assert(descent_speed(&g) > level_ten);
+
+    /* Endless replenishment: repeatedly clear the lower field and insert rows. */
+    init_field(&g);
+    for (int i = 0; i < 200; ++i) {
+        for (int row = 2; row < ROWS; ++row) {
+            for (int col = 0; col < COLS; ++col) {
+                if (g.bricks[row][col]) --g.remaining;
+                g.bricks[row][col] = g.bonus_bricks[row][col] = false;
+            }
+        }
+        g.scroll_offset = BRICK_PITCH - 0.001f;
+        assert(!update_field(&g, (float)STEP));
+        int count = 0;
+        for (int row = 0; row < ROWS; ++row)
+            for (int col = 0; col < COLS; ++col) count += g.bricks[row][col];
+        assert(count == g.remaining);
+    }
+}
+
+static void test_block_death(void) {
+    Game g = start(123);
+    clear_board(&g);
+    int row = 34, col = 9;
+    g.bricks[row][col] = true; g.remaining = 1;
+    g.scroll_offset = PADDLE_Y - (BRICK_TOP + row * BRICK_PITCH + BRICK_H);
+    assert(field_threatens_paddle(&g));
+    g.paddle = 800;
+    assert(!field_threatens_paddle(&g));
+    g.scroll_offset += 16;
+    assert(field_threatens_paddle(&g)); /* Below the paddle, at a different x. */
+    g.row_age[row] = 0.25f;
+    assert(!field_threatens_paddle(&g));
+    g.row_age[row] = BRICK_FADE_SECONDS;
+    g.level = 5; g.destroyed = 450; g.score = 45000;
+    update(&g, (float)STEP);
+    assert(g.miss_time > 0 && g.lives == 2 && g.reset_field_after_miss);
+    for (int i = 0; i < 220; ++i) update(&g, (float)STEP);
+    assert(g.miss_time == 0 && g.level == 5 && g.score == 45000 && g.destroyed == 450);
+    assert(g.remaining == INITIAL_ROWS * COLS && ball_count(&g) == 1);
+    assert(g.balls[0].attached && !g.reset_field_after_miss);
+    for (int life = 0; life < 2; ++life) {
+        clear_board(&g);
+        g.bricks[35][0] = true; g.remaining = 1;
+        update(&g, (float)STEP);
+        for (int i = 0; i < 220; ++i) update(&g, (float)STEP);
+    }
+    assert(g.screen == GAME_OVER && g.lives == 0);
+}
+
+static void test_level_colors(void) {
+    for (int row = 0; row < 10; ++row) {
+        SDL_Color a = generated_row_color(1, row), b = generated_row_color(9, row);
+        assert(SDL_memcmp(&a, &b, sizeof(a)) == 0);
+        SDL_Color c = generated_row_color(10, row);
+        assert(SDL_memcmp(&a, &c, sizeof(a)) != 0);
+        SDL_Color repeat = generated_row_color(1, row + 10);
+        assert(SDL_memcmp(&a, &repeat, sizeof(a)) == 0);
+        assert(a.r > 100 && a.g > 100 && a.b > 100);
+    }
+    SDL_Color first = generated_row_color(1, 0), last = generated_row_color(1, 9);
+    assert(SDL_memcmp(&first, &level_palette[0], sizeof(first)) == 0);
+    assert(SDL_memcmp(&last, &level_palette[1], sizeof(last)) == 0);
+    Game g = start(123);
+    SDL_Color existing = g.row_color[0];
+    g.level = 10;
+    add_top_row(&g);
+    assert(SDL_memcmp(&g.row_color[1], &existing, sizeof(existing)) == 0);
+    SDL_Color expected = generated_row_color(10, INITIAL_ROWS);
+    assert(SDL_memcmp(&g.row_color[0], &expected, sizeof(expected)) == 0);
 }
 
 static void test_render(void) {
@@ -315,6 +432,19 @@ static void test_render(void) {
     assert(!update_soft_bounce(&g.balls[0], 0.25f));
     assert(!g.balls[0].deforming && squash_amount(&g.balls[0]) == 0);
     break_paddle(&g); render(r, &g);
+    g.screen = PLAYING; g.miss_time = 0;
+    init_field(&g); add_top_row(&g);
+    for (int col = 0; col < COLS; ++col) g.bonus_bricks[0][col] = false;
+    render(r, &g);
+    assert(SDL_ReadSurfacePixel(surface, 50, 105, &red, &green, &blue, &alpha));
+    assert(red == 12 && green == 18 && blue == 32); /* New row starts invisible. */
+    g.row_age[0] = 0.25f; render(r, &g);
+    assert(SDL_ReadSurfacePixel(surface, 50, 105, &red, &green, &blue, &alpha));
+    assert(red > 100 && red < g.row_color[0].r);
+    g.row_age[0] = 0.5f; render(r, &g);
+    assert(SDL_ReadSurfacePixel(surface, 50, 105, &red, &green, &blue, &alpha));
+    assert(red == g.row_color[0].r && green == g.row_color[0].g && blue == g.row_color[0].b);
+    if (SDL_getenv("BREAKBOUT_FIELD_CAPTURE")) SDL_SaveBMP(surface, SDL_getenv("BREAKBOUT_FIELD_CAPTURE"));
     SDL_DestroyTexture(g.ball_texture);
     SDL_DestroyRenderer(r); SDL_DestroySurface(surface); SDL_Quit();
 }
@@ -328,6 +458,9 @@ int main(void) {
     test_spin();
     test_paddle_spin();
     test_speed_width();
+    test_endless_descent();
+    test_block_death();
+    test_level_colors();
     test_render();
     puts("PASS: random bonus placement, three-ball release, impulse/gravity/recoil, multicatch, shared charge, per-ball launch/guide, last-ball loss, trails and prediction");
     return 0;
