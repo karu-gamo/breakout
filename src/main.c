@@ -40,7 +40,7 @@ typedef struct {
     Screen screen;
     float paddle, x, y, vx, vy;
     bool attached;
-    bool left_down, right_down;
+    bool left_down;
     float paddle_angle;
     float angle_history[PADDLE_HISTORY];
     float charge, shot_power, attach_offset, base_launch_angle, shake_time;
@@ -73,7 +73,7 @@ static void reset_history(Game *g) {
 
 static void record_paddle(Game *g) {
     float movement = g->paddle - g->paddle_history[0];
-    if (g->right_down && movement != 0)
+    if (movement != 0)
         g->paddle_angle = clamp(g->paddle_angle + movement * 0.15f * DEG_TO_RAD,
                                 -MAX_TILT, MAX_TILT);
     else {
@@ -147,7 +147,7 @@ static SDL_FRect brick_rect(int row, int col) {
 static void load_stage(Game *g) {
     g->remaining = 0;
     g->miss_time = 0;
-    g->left_down = g->right_down = false;
+    g->left_down = false;
     g->paddle_angle = 0;
     reset_history(g);
     SDL_memset(g->particles, 0, sizeof(g->particles));
@@ -238,7 +238,7 @@ static void update_particles(Game *g, float dt) {
 static void break_paddle(Game *g) {
     --g->lives;
     g->miss_time = MISS_DURATION;
-    g->left_down = g->right_down = false;
+    g->left_down = false;
     g->attached = false;
     g->preview_active = false;
     g->charge = 0;
@@ -385,7 +385,7 @@ static int predict_ball(const Game *g, BallPreview samples[PREVIEW_SAMPLES]) {
                             2 * span);
         if (phase < 0) phase += 2 * span;
         float x = RADIUS + (phase <= span ? phase : 2 * span - phase);
-        float opacity = (float)(PREVIEW_SEGMENTS - i) * 0.05f;
+        float opacity = fmaxf(0.05f, (float)(PREVIEW_SEGMENTS - i) * 0.05f);
         samples[count++] = (BallPreview){x, y,
             (Uint8)SDL_roundf(255.0f * opacity * strength)};
     }
@@ -403,7 +403,7 @@ static void render_prediction(SDL_Renderer *r, const Game *g) {
     BallPreview samples[PREVIEW_SAMPLES];
     int count = predict_ball(g, samples);
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    /* Draw far to near, with opacity increasing by 5% per distance segment. */
+    /* Draw far to near. Keep the landing marker at least 5% opaque before fade. */
     for (int i = count - 1; i >= 0; --i) {
         if (samples[i].alpha == 0) continue;
         SDL_SetRenderDrawColor(r, 250, 250, 245, samples[i].alpha);
@@ -479,7 +479,7 @@ static void render(SDL_Renderer *r, const Game *g) {
         centered(r, 330, "CLICK TO START", 2);
         centered(r, 395, "MOVE MOUSE TO CONTROL THE PADDLE", 2);
         centered(r, 430, "HOLD LEFT BUTTON TO CHARGE / RELEASE TO FIRE", 2);
-        centered(r, 485, "HOLD RIGHT + MOVE TO AIM (+/-40 DEG)", 2);
+        centered(r, 485, "MOVE MOUSE TO TILT AND AIM (+/-40 DEG)", 2);
         centered(r, 560, "ESC: QUIT", 1.5f);
     } else {
         char hud[128];
@@ -582,16 +582,12 @@ int main(int argc, char **argv) {
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) running = false;
             if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
                 focused = false;
-                game.left_down = game.right_down = false;
+                game.left_down = false;
                 game.charge = 0;
             }
             if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) focused = true;
             if (event.type == SDL_EVENT_MOUSE_MOTION)
                 game.paddle = clamp(event.motion.x, PADDLE_W / 2, WIDTH - PADDLE_W / 2);
-            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT &&
-                game.screen == PLAYING && game.miss_time <= 0) game.right_down = true;
-            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_RIGHT)
-                game.right_down = false;
             if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
                 game.paddle = clamp(event.button.x, PADDLE_W / 2, WIDTH - PADDLE_W / 2);
                 click(&game);
