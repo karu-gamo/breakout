@@ -21,7 +21,8 @@
 #define BRICK_PITCH 16.0f
 #define BRICK_H 12.5f
 #define DESCENT_LINE_Y 260.0f
-#define BASE_DESCENT_SPEED 4.0f
+#define BASE_DESCENT_SPEED 8.0f
+#define BONUS_BRICK_INTERVAL 30
 #define BRICK_FADE_SECONDS 0.5f
 #define RADIUS 16.0f
 #define SOFT_COMPRESS_SECONDS 0.0325f
@@ -217,7 +218,7 @@ static void init_field(Game *g) {
     g->remaining = INITIAL_ROWS * COLS;
     g->scroll_offset = 0;
     g->generated_rows = INITIAL_ROWS;
-    g->bonus_credit = g->remaining % 11;
+    g->bonus_credit = g->remaining % BONUS_BRICK_INTERVAL;
     SDL_memset(g->bricks, 0, sizeof(g->bricks));
     SDL_memset(g->bonus_bricks, 0, sizeof(g->bonus_bricks));
     for (int r = 0; r < ROWS; ++r) {
@@ -227,7 +228,7 @@ static void init_field(Game *g) {
     }
     int cells[INITIAL_ROWS * COLS];
     for (int i = 0; i < INITIAL_ROWS * COLS; ++i) cells[i] = i;
-    for (int i = 0; i < g->remaining / 11; ++i) {
+    for (int i = 0; i < g->remaining / BONUS_BRICK_INTERVAL; ++i) {
         int chosen = i + (int)(random_unit(g) * (INITIAL_ROWS * COLS - i));
         int cell = cells[chosen]; cells[chosen] = cells[i]; cells[i] = cell;
         g->bonus_bricks[cell / COLS][cell % COLS] = true;
@@ -304,8 +305,8 @@ static void add_top_row(Game *g) {
     }
     g->row_age[0] = 0;
     g->row_color[0] = generated_row_color(g->level, g->generated_rows++);
-    int bonus_count = (g->bonus_credit + COLS) / 11;
-    g->bonus_credit = (g->bonus_credit + COLS) % 11;
+    int bonus_count = (g->bonus_credit + COLS) / BONUS_BRICK_INTERVAL;
+    g->bonus_credit = (g->bonus_credit + COLS) % BONUS_BRICK_INTERVAL;
     int cells[COLS];
     for (int c = 0; c < COLS; ++c) cells[c] = c;
     for (int i = 0; i < bonus_count; ++i) {

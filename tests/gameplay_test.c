@@ -32,7 +32,7 @@ static void test_placement(void) {
                 bonus += g.bonus_bricks[r][c];
             }
         }
-        assert(bonus == total / 11 && g.remaining == total);
+        assert(bonus == total / 30 && g.remaining == total);
         assert(total == 200);
         assert(1 + bonus * 3 <= MAX_BALLS);
         SDL_FRect first = brick_rect(&g, 0, 0), last = brick_rect(&g, INITIAL_ROWS - 1, COLS - 1);
@@ -275,6 +275,11 @@ static void test_endless_descent(void) {
     SDL_Color old_color = g.row_color[0];
     assert(!update_field(&g, (float)STEP));
     assert(g.generated_rows == INITIAL_ROWS + 1 && g.remaining == 220);
+    int bonuses = 0;
+    for (int row = 0; row < ROWS; ++row)
+        for (int col = 0; col < COLS; ++col) bonuses += g.bonus_bricks[row][col];
+    assert(bonuses == 220 / 30);
+    assert(BASE_DESCENT_SPEED == 8);
     assert(g.row_age[0] == 0 && !brick_solid(&g, 0));
     assert(g.bonus_bricks[1][0] == old_bonus && SDL_memcmp(&g.row_color[1], &old_color, sizeof(old_color)) == 0);
     assert(fabsf(brick_rect(&g, 1, 0).y - old_y - BASE_DESCENT_SPEED * (float)STEP) < 0.001f);
