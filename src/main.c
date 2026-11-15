@@ -266,13 +266,15 @@ static SDL_Color strong_brick_color(const Game *g, int row, int col) {
                       (Uint8)SDL_roundf(base.b + (255 - base.b) * flash), 255};
 }
 
+static bool pattern_has_brick(int level, int row_number, int col) {
+    int spacing = 2 + (level - 1) / 5;
+    return (col + row_number / 2) % spacing != 0;
+}
+
 static void init_field(Game *g) {
-    g->remaining = INITIAL_ROWS * COLS;
+    g->remaining = 0;
     g->scroll_offset = 0;
     g->generated_rows = INITIAL_ROWS;
-    g->bonus_credit = g->remaining % split_interval(g->level);
-    int hard_interval = strong_interval(g->level);
-    g->strong_credit = hard_interval ? g->remaining % hard_interval : 0;
     SDL_memset(g->bricks, 0, sizeof(g->bricks));
     SDL_memset(g->bonus_bricks, 0, sizeof(g->bonus_bricks));
     SDL_memset(g->strong_hits, 0, sizeof(g->strong_hits));
@@ -281,14 +283,22 @@ static void init_field(Game *g) {
         g->row_age[r] = BRICK_FADE_SECONDS;
         g->row_color[r] = generated_row_color(g->level, r);
         for (int c = 0; c < COLS; ++c) {
-            g->bricks[r][c] = r < INITIAL_ROWS;
+            g->bricks[r][c] = r < INITIAL_ROWS &&
+                pattern_has_brick(g->level, INITIAL_ROWS - 1 - r, c);
+            g->remaining += g->bricks[r][c];
             g->brick_hit_time[r][c] = -100;
         }
     }
     int cells[INITIAL_ROWS * COLS];
-    for (int i = 0; i < INITIAL_ROWS * COLS; ++i) cells[i] = i;
-    place_specials(g, cells, INITIAL_ROWS * COLS,
-        g->remaining / split_interval(g->level), hard_interval ? g->remaining / hard_interval : 0);
+    int count = 0;
+    for (int r = 0; r < INITIAL_ROWS; ++r)
+        for (int c = 0; c < COLS; ++c)
+            if (g->bricks[r][c]) cells[count++] = r * COLS + c;
+    int hard_interval = strong_interval(g->level);
+    g->bonus_credit = count % split_interval(g->level);
+    g->strong_credit = hard_interval ? count % hard_interval : 0;
+    place_specials(g, cells, count, count / split_interval(g->level),
+                   hard_interval ? count / hard_interval : 0);
 }
 
 static void start_run(Game *g) {
@@ -360,7 +370,7 @@ static void add_top_row(Game *g) {
         g->row_color[r] = g->row_color[r - 1];
     }
     for (int c = 0; c < COLS; ++c) {
-        g->bricks[0][c] = true;
+        g->bricks[0][c] = pattern_has_brick(g->level, g->generated_rows, c);
         g->bonus_bricks[0][c] = false;
         g->strong_hits[0][c] = 0;
         g->strong_type[0][c] = NO_METAL;
@@ -368,15 +378,16 @@ static void add_top_row(Game *g) {
     }
     g->row_age[0] = 0;
     g->row_color[0] = generated_row_color(g->level, g->generated_rows++);
-    int bonus_count = (g->bonus_credit + COLS) / split_interval(g->level);
-    g->bonus_credit = (g->bonus_credit + COLS) % split_interval(g->level);
+    int cells[COLS], count = 0;
+    for (int c = 0; c < COLS; ++c)
+        if (g->bricks[0][c]) cells[count++] = c;
+    int bonus_count = (g->bonus_credit + count) / split_interval(g->level);
+    g->bonus_credit = (g->bonus_credit + count) % split_interval(g->level);
     int hard_interval = strong_interval(g->level);
-    int strong_count = hard_interval ? (g->strong_credit + COLS) / hard_interval : 0;
-    g->strong_credit = hard_interval ? (g->strong_credit + COLS) % hard_interval : 0;
-    int cells[COLS];
-    for (int c = 0; c < COLS; ++c) cells[c] = c;
-    place_specials(g, cells, COLS, bonus_count, strong_count);
-    g->remaining += COLS;
+    int strong_count = hard_interval ? (g->strong_credit + count) / hard_interval : 0;
+    g->strong_credit = hard_interval ? (g->strong_credit + count) % hard_interval : 0;
+    place_specials(g, cells, count, bonus_count, strong_count);
+    g->remaining += count;
 }
 
 static bool update_field(Game *g, float dt) {

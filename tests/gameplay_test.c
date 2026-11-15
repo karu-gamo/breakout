@@ -34,7 +34,7 @@ static void test_placement(void) {
             }
         }
         assert(bonus == total / 40 && g.remaining == total);
-        assert(total == 200);
+        assert(total == 100);
         assert(1 + bonus * 3 <= MAX_BALLS);
         SDL_FRect first = brick_rect(&g, 0, 0), last = brick_rect(&g, INITIAL_ROWS - 1, COLS - 1);
         assert(first.w == 41 && first.h == 12.5f);
@@ -283,11 +283,11 @@ static void test_endless_descent(void) {
     bool old_bonus = g.bonus_bricks[0][0];
     SDL_Color old_color = g.row_color[0];
     assert(!update_field(&g, (float)STEP));
-    assert(g.generated_rows == INITIAL_ROWS + 1 && g.remaining == 220);
+    assert(g.generated_rows == INITIAL_ROWS + 1 && g.remaining == 110);
     int bonuses = 0;
     for (int row = 0; row < ROWS; ++row)
         for (int col = 0; col < COLS; ++col) bonuses += g.bonus_bricks[row][col];
-    assert(bonuses == 220 / 40);
+    assert(bonuses == 110 / 40);
     assert(BASE_DESCENT_SPEED == 8);
     assert(g.row_age[0] == 0 && !brick_solid(&g, 0));
     assert(g.bonus_bricks[1][0] == old_bonus && SDL_memcmp(&g.row_color[1], &old_color, sizeof(old_color)) == 0);
@@ -395,11 +395,12 @@ static void test_strong_bricks(void) {
                 strong += g.strong_hits[row][col] > 0;
                 split += g.bonus_bricks[row][col];
                 assert(!g.strong_hits[row][col] || !g.bonus_bricks[row][col]);
+                assert((!g.strong_hits[row][col] && !g.bonus_bricks[row][col]) || g.bricks[row][col]);
             }
         }
         int interval = strong_interval(g.level);
-        assert(strong == (interval ? 200 / interval : 0));
-        assert(split == 200 / split_interval(g.level));
+        assert(strong == (interval ? g.remaining / interval : 0));
+        assert(split == g.remaining / split_interval(g.level));
         add_top_row(&g);
         strong = split = 0;
         for (int row = 0; row < ROWS; ++row)
@@ -407,9 +408,10 @@ static void test_strong_bricks(void) {
                 strong += g.strong_hits[row][col] > 0;
                 split += g.bonus_bricks[row][col];
                 assert(!g.strong_hits[row][col] || !g.bonus_bricks[row][col]);
+                assert((!g.strong_hits[row][col] && !g.bonus_bricks[row][col]) || g.bricks[row][col]);
             }
-        assert(strong == (interval ? 220 / interval : 0));
-        assert(split == 220 / split_interval(g.level));
+        assert(strong == (interval ? g.remaining / interval : 0));
+        assert(split == g.remaining / split_interval(g.level));
     }
     for (int metal = SILVER; metal <= GOLD; ++metal) {
       for (int charge = 0; charge < 3; ++charge) {
@@ -507,6 +509,30 @@ static void test_gravity_prediction(void) {
     b.vy = -100; assert(predict_ball(&g, &b, points) == 0);
     b.vy = 100; b.y = PREVIEW_START_Y; assert(predict_ball(&g, &b, points) == 0);
     b.y = PREVIEW_FULL_Y; b.attached = true; assert(predict_ball(&g, &b, points) == 0);
+}
+
+static void test_block_patterns(void) {
+    const int levels[] = {1, 5, 6, 10, 11, 15, 16, 20};
+    const int spacings[] = {2, 2, 3, 3, 4, 4, 5, 5};
+    for (int index = 0; index < (int)SDL_arraysize(levels); ++index) {
+        Game g = start(123); g.level = levels[index]; init_field(&g);
+        for (int row = 0; row < INITIAL_ROWS; row += 2) {
+            int previous_gap = -1;
+            for (int col = 0; col < COLS; ++col) {
+                assert(g.bricks[row][col] == g.bricks[row + 1][col]);
+                if (!g.bricks[row][col]) {
+                    if (previous_gap >= 0) assert(col - previous_gap == spacings[index]);
+                    previous_gap = col;
+                }
+                if (index < 2 && row + 2 < INITIAL_ROWS)
+                    assert(g.bricks[row][col] != g.bricks[row + 2][col]);
+            }
+        }
+        for (int pair = 0; pair < 4; ++pair) {
+            add_top_row(&g); add_top_row(&g);
+            for (int col = 0; col < COLS; ++col) assert(g.bricks[0][col] == g.bricks[1][col]);
+        }
+    }
 }
 
 static void test_render(void) {
@@ -618,6 +644,7 @@ int main(void) {
     test_strong_bricks();
     test_metal_distribution();
     test_gravity_prediction();
+    test_block_patterns();
     test_render();
     puts("PASS: random bonus placement, three-ball release, impulse/gravity/recoil, multicatch, shared charge, per-ball launch/guide, last-ball loss, trails and prediction");
     return 0;
