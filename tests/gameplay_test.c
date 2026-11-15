@@ -112,15 +112,14 @@ static void test_multicatch_and_charge(void) {
         assert(fabsf(hypotf(b->vx, b->vy) - speed(&g) * 2.5f) < 0.001f);
         assert(fabsf(atan2f(b->vx, -b->vy) - angles[i]) < 0.0001f);
     }
-    int lives = g.lives;
     g.balls[0].y = HEIGHT + 20; g.balls[0].vy = 100;
     update(&g, (float)STEP);
-    assert(g.lives == lives && ball_count(&g) == 2);
+    assert(g.screen == PLAYING && g.miss_time == 0 && ball_count(&g) == 2);
     for (int i = 1; i < 3; ++i) { g.balls[i].y = HEIGHT + 20; g.balls[i].vy = 100; }
     update(&g, (float)STEP);
-    assert(g.lives == lives - 1 && g.miss_time > 0);
+    assert(g.miss_time > 0 && ball_count(&g) == 0);
     for (int i = 0; i < 220; ++i) update(&g, (float)STEP);
-    assert(ball_count(&g) == 1 && g.balls[0].attached);
+    assert(g.screen == GAME_OVER && ball_count(&g) == 0);
 }
 
 static void test_trails_and_prediction(void) {
@@ -342,18 +341,13 @@ static void test_block_death(void) {
     g.row_age[row] = BRICK_FADE_SECONDS;
     g.level = 5; g.destroyed = 450; g.score = 45000;
     update(&g, (float)STEP);
-    assert(g.miss_time > 0 && g.lives == 2 && g.reset_field_after_miss);
+    assert(g.miss_time > 0 && ball_count(&g) == 0);
     for (int i = 0; i < 220; ++i) update(&g, (float)STEP);
-    assert(g.miss_time == 0 && g.level == 5 && g.score == 45000 && g.destroyed == 450);
-    assert(g.remaining == INITIAL_ROWS * COLS && ball_count(&g) == 1);
-    assert(g.balls[0].attached && !g.reset_field_after_miss);
-    for (int life = 0; life < 2; ++life) {
-        clear_board(&g);
-        g.bricks[35][0] = true; g.remaining = 1;
-        update(&g, (float)STEP);
-        for (int i = 0; i < 220; ++i) update(&g, (float)STEP);
-    }
-    assert(g.screen == GAME_OVER && g.lives == 0);
+    assert(g.screen == GAME_OVER && g.level == 5 && g.score == 45000 && g.destroyed == 450);
+    assert(ball_count(&g) == 0);
+    click(&g); assert(g.screen == TITLE);
+    click(&g); assert(g.screen == PLAYING && g.level == 1 && g.score == 0);
+    assert(ball_count(&g) == 1 && g.balls[0].attached);
 }
 
 static void test_level_colors(void) {

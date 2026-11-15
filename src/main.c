@@ -92,8 +92,7 @@ typedef struct {
     float scroll_offset, row_age[ROWS];
     SDL_Color row_color[ROWS];
     int generated_rows, bonus_credit, strong_credit, silvers_since_gold;
-    bool reset_field_after_miss;
-    int level, lives, remaining;
+    int level, remaining;
     Uint64 score, destroyed;
 } Game;
 
@@ -295,9 +294,7 @@ static void start_run(Game *g) {
     g->level = 1;
     g->silvers_since_gold = 0;
     g->destroyed = g->score = 0;
-    g->lives = 3;
     g->miss_time = 0;
-    g->reset_field_after_miss = false;
     g->left_down = false;
     g->charge = 0;
     reset_history(g);
@@ -486,7 +483,6 @@ static void update_particles(Game *g, float dt) {
 }
 
 static void break_paddle(Game *g) {
-    --g->lives;
     g->miss_time = MISS_DURATION;
     g->left_down = false;
     SDL_memset(g->balls, 0, sizeof(g->balls));
@@ -682,20 +678,11 @@ static void update(Game *g, float dt) {
             p->angle += p->spin * dt;
         }
         g->miss_time = fmaxf(0, g->miss_time - dt);
-        if (g->miss_time == 0) {
-            reset_history(g);
-            if (g->lives == 0) g->screen = GAME_OVER;
-            else {
-                if (g->reset_field_after_miss) init_field(g);
-                reset_ball(g, &g->balls[0]);
-            }
-            g->reset_field_after_miss = false;
-        }
+        if (g->miss_time == 0) g->screen = GAME_OVER;
         return;
     }
     record_paddle(g);
     if (update_field(g, dt)) {
-        g->reset_field_after_miss = true;
         break_paddle(g);
         return;
     }
@@ -886,8 +873,8 @@ static void render(SDL_Renderer *r, const Game *g) {
         centered(r, 580, "ESC: QUIT", 1.5f);
     } else {
         char hud[128];
-        SDL_snprintf(hud, sizeof(hud), "LEVEL %d   LIVES %d   BALLS %d   SCORE %llu",
-                     g->level, g->lives, ball_count(g), (unsigned long long)g->score);
+        SDL_snprintf(hud, sizeof(hud), "LEVEL %d   BALLS %d   SCORE %llu",
+                     g->level, ball_count(g), (unsigned long long)g->score);
         centered(r, 24, hud, 2);
         color(r, 40, 55, 78);
         SDL_RenderLine(r, 0, 59, WIDTH, 59);
