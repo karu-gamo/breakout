@@ -15,6 +15,7 @@ static Game start(Uint32 seed) {
 static void empty_field(Game *g) {
     SDL_memset(g->bricks, 0, sizeof(g->bricks));
     SDL_memset(g->bonus_bricks, 0, sizeof(g->bonus_bricks));
+    SDL_memset(g->strong_hits, 0, sizeof(g->strong_hits));
     g->bricks[4][9] = true;
     g->remaining = 1;
 }
@@ -256,6 +257,7 @@ static void test_speed_width(void) {
 static void clear_board(Game *g) {
     SDL_memset(g->bricks, 0, sizeof(g->bricks));
     SDL_memset(g->bonus_bricks, 0, sizeof(g->bonus_bricks));
+    SDL_memset(g->strong_hits, 0, sizeof(g->strong_hits));
     g->remaining = 0;
     g->scroll_offset = 0;
     for (int row = 0; row < ROWS; ++row) g->row_age[row] = BRICK_FADE_SECONDS;
@@ -376,6 +378,73 @@ static void test_level_colors(void) {
     assert(SDL_memcmp(&g.row_color[0], &expected, sizeof(expected)) == 0);
 }
 
+static void test_strong_bricks(void) {
+    assert(strong_interval(9) == 0 && strong_interval(10) == 20);
+    assert(strong_interval(14) == 20 && strong_interval(15) == 19);
+    assert(strong_interval(60) == 10 && strong_interval(500) == 10);
+    assert(split_interval(10) == 30 && split_interval(14) == 30);
+    assert(split_interval(15) == 31 && split_interval(160) == 60 && split_interval(500) == 60);
+    const int levels[] = {1, 9, 10, 15, 60, 160};
+    for (int index = 0; index < (int)SDL_arraysize(levels); ++index) {
+        Game g = start(123); g.level = levels[index]; init_field(&g);
+        int strong = 0, split = 0;
+        for (int row = 0; row < ROWS; ++row) {
+            for (int col = 0; col < COLS; ++col) {
+                strong += g.strong_hits[row][col] > 0;
+                split += g.bonus_bricks[row][col];
+                assert(!g.strong_hits[row][col] || !g.bonus_bricks[row][col]);
+            }
+        }
+        int interval = strong_interval(g.level);
+        assert(strong == (interval ? 200 / interval : 0));
+        assert(split == 200 / split_interval(g.level));
+        add_top_row(&g);
+        strong = split = 0;
+        for (int row = 0; row < ROWS; ++row)
+            for (int col = 0; col < COLS; ++col) {
+                strong += g.strong_hits[row][col] > 0;
+                split += g.bonus_bricks[row][col];
+                assert(!g.strong_hits[row][col] || !g.bonus_bricks[row][col]);
+            }
+        assert(strong == (interval ? 220 / interval : 0));
+        assert(split == 220 / split_interval(g.level));
+    }
+    for (int charged = 0; charged < 2; ++charged) {
+        Game g = start(123); clear_board(&g);
+        g.level = 10; g.destroyed = 900; g.score = 90000;
+        g.bricks[0][0] = true; g.strong_hits[0][0] = 4; g.remaining = 1;
+        for (int hit = 0; hit < 4; ++hit) {
+            g.animation_time = 0.7f + hit;
+            Ball b = {.active = true, .x = 70, .y = BRICK_TOP - RADIUS, .vy = 400,
+                      .shot_power = charged ? 1 : 0, .pierces = charged ? 5 : 0};
+            update_ball(&g, &b, (float)STEP);
+            assert(b.bounce_pending && b.pierces == (charged ? 5 : 0));
+            assert(g.strong_hits[0][0] == 3 - hit);
+            if (hit < 3) {
+                assert(g.bricks[0][0] && g.destroyed == 900 && g.score == 90000 && g.remaining == 1);
+                SDL_Color white = strong_brick_color(&g, 0, 0);
+                assert(white.r == 255 && white.g == 255 && white.b == 255);
+                update_ball(&g, &b, (float)STEP);
+                assert(g.strong_hits[0][0] == 3 - hit); /* One contact cannot count twice. */
+            } else assert(!g.bricks[0][0] && g.destroyed == 901 && g.remaining == 0);
+        }
+    }
+    Game g = start(123); g.level = 10; init_field(&g);
+    g.brick_hit_time[0][0] = -100;
+    g.animation_time = 0;
+    SDL_Color color = strong_brick_color(&g, 0, 0);
+    assert(color.r == 255 && color.g == 255 && color.b == 255);
+    g.animation_time = 0.5f;
+    color = strong_brick_color(&g, 0, 0);
+    assert(color.r == 255 && color.g == 216 && color.b == 64);
+    g.animation_time = 1;
+    color = strong_brick_color(&g, 0, 0);
+    assert(color.g == 255 && color.b == 255);
+    g.strong_hits[0][0] = 2; g.brick_hit_time[0][0] = 0.7f;
+    add_top_row(&g);
+    assert(g.strong_hits[1][0] == 2 && g.brick_hit_time[1][0] == 0.7f);
+}
+
 static void test_render(void) {
     assert(SDL_Init(SDL_INIT_VIDEO));
     SDL_Surface *surface = SDL_CreateSurface(WIDTH, HEIGHT, SDL_PIXELFORMAT_RGBA32);
@@ -450,6 +519,21 @@ static void test_render(void) {
     assert(SDL_ReadSurfacePixel(surface, 50, 105, &red, &green, &blue, &alpha));
     assert(red == g.row_color[0].r && green == g.row_color[0].g && blue == g.row_color[0].b);
     if (SDL_getenv("BREAKBOUT_FIELD_CAPTURE")) SDL_SaveBMP(surface, SDL_getenv("BREAKBOUT_FIELD_CAPTURE"));
+    g.level = 10; init_field(&g); g.animation_time = 0.75f;
+    int strong_row = -1, strong_col = -1;
+    for (int row = 0; row < ROWS && strong_row < 0; ++row)
+        for (int col = 0; col < COLS; ++col)
+            if (g.strong_hits[row][col]) { strong_row = row; strong_col = col; break; }
+    assert(strong_row >= 0);
+    SDL_FRect strong_rect = brick_rect(&g, strong_row, strong_col);
+    int px = (int)(strong_rect.x + strong_rect.w / 2), py = (int)(strong_rect.y + strong_rect.h / 2);
+    render(r, &g);
+    assert(SDL_ReadSurfacePixel(surface, px, py, &red, &green, &blue, &alpha));
+    assert(red == 255 && green == 216 && blue == 64);
+    if (SDL_getenv("BREAKBOUT_STRONG_CAPTURE")) SDL_SaveBMP(surface, SDL_getenv("BREAKBOUT_STRONG_CAPTURE"));
+    g.animation_time = 1; render(r, &g);
+    assert(SDL_ReadSurfacePixel(surface, px, py, &red, &green, &blue, &alpha));
+    assert(red == 255 && green == 255 && blue == 255);
     SDL_DestroyTexture(g.ball_texture);
     SDL_DestroyRenderer(r); SDL_DestroySurface(surface); SDL_Quit();
 }
@@ -466,6 +550,7 @@ int main(void) {
     test_endless_descent();
     test_block_death();
     test_level_colors();
+    test_strong_bricks();
     test_render();
     puts("PASS: random bonus placement, three-ball release, impulse/gravity/recoil, multicatch, shared charge, per-ball launch/guide, last-ball loss, trails and prediction");
     return 0;

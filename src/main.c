@@ -23,6 +23,7 @@
 #define DESCENT_LINE_Y 260.0f
 #define BASE_DESCENT_SPEED 8.0f
 #define BONUS_BRICK_INTERVAL 30
+#define STRONG_BRICK_HITS 4
 #define BRICK_FADE_SECONDS 0.5f
 #define RADIUS 16.0f
 #define SOFT_COMPRESS_SECONDS 0.0325f
@@ -84,9 +85,11 @@ typedef struct {
     float miss_time;
     PaddlePiece paddle_pieces[3];
     bool bricks[ROWS][COLS], bonus_bricks[ROWS][COLS];
+    Uint8 strong_hits[ROWS][COLS];
+    float brick_hit_time[ROWS][COLS];
     float scroll_offset, row_age[ROWS];
     SDL_Color row_color[ROWS];
-    int generated_rows, bonus_credit;
+    int generated_rows, bonus_credit, strong_credit;
     bool reset_field_after_miss;
     int level, lives, remaining;
     Uint64 score, destroyed;
@@ -214,25 +217,58 @@ static SDL_Color generated_row_color(int level, int row_number) {
                        (Uint8)SDL_roundf(start.b + (end.b - start.b) * t), 255};
 }
 
+static int split_interval(int level) {
+    int increase = level > 10 ? (level - 10) / 5 : 0;
+    return BONUS_BRICK_INTERVAL + (increase < 30 ? increase : 30);
+}
+
+static int strong_interval(int level) {
+    if (level < 10) return 0;
+    int interval = 20 - (level - 10) / 5;
+    return interval > 10 ? interval : 10;
+}
+
+static void place_specials(Game *g, int *cells, int count, int bonuses, int strong) {
+    for (int i = 0; i < bonuses + strong; ++i) {
+        int chosen = i + (int)(random_unit(g) * (count - i));
+        int cell = cells[chosen]; cells[chosen] = cells[i]; cells[i] = cell;
+        int row = cell / COLS, col = cell % COLS;
+        if (i < bonuses) g->bonus_bricks[row][col] = true;
+        else g->strong_hits[row][col] = STRONG_BRICK_HITS;
+    }
+}
+
+static SDL_Color strong_brick_color(const Game *g, int row, int col) {
+    float periodic_age = fmodf(g->animation_time, 1.0f);
+    float hit_age = g->animation_time - g->brick_hit_time[row][col];
+    float age = fminf(periodic_age, hit_age);
+    float flash = 1 - clamp(age / 0.5f, 0, 1);
+    return (SDL_Color){255, (Uint8)SDL_roundf(216 + 39 * flash),
+                      (Uint8)SDL_roundf(64 + 191 * flash), 255};
+}
+
 static void init_field(Game *g) {
     g->remaining = INITIAL_ROWS * COLS;
     g->scroll_offset = 0;
     g->generated_rows = INITIAL_ROWS;
-    g->bonus_credit = g->remaining % BONUS_BRICK_INTERVAL;
+    g->bonus_credit = g->remaining % split_interval(g->level);
+    int hard_interval = strong_interval(g->level);
+    g->strong_credit = hard_interval ? g->remaining % hard_interval : 0;
     SDL_memset(g->bricks, 0, sizeof(g->bricks));
     SDL_memset(g->bonus_bricks, 0, sizeof(g->bonus_bricks));
+    SDL_memset(g->strong_hits, 0, sizeof(g->strong_hits));
     for (int r = 0; r < ROWS; ++r) {
         g->row_age[r] = BRICK_FADE_SECONDS;
         g->row_color[r] = generated_row_color(g->level, r);
-        for (int c = 0; c < COLS; ++c) g->bricks[r][c] = r < INITIAL_ROWS;
+        for (int c = 0; c < COLS; ++c) {
+            g->bricks[r][c] = r < INITIAL_ROWS;
+            g->brick_hit_time[r][c] = -100;
+        }
     }
     int cells[INITIAL_ROWS * COLS];
     for (int i = 0; i < INITIAL_ROWS * COLS; ++i) cells[i] = i;
-    for (int i = 0; i < g->remaining / BONUS_BRICK_INTERVAL; ++i) {
-        int chosen = i + (int)(random_unit(g) * (INITIAL_ROWS * COLS - i));
-        int cell = cells[chosen]; cells[chosen] = cells[i]; cells[i] = cell;
-        g->bonus_bricks[cell / COLS][cell % COLS] = true;
-    }
+    place_specials(g, cells, INITIAL_ROWS * COLS,
+        g->remaining / split_interval(g->level), hard_interval ? g->remaining / hard_interval : 0);
 }
 
 static void start_run(Game *g) {
@@ -296,24 +332,27 @@ static void add_top_row(Game *g) {
     for (int r = ROWS - 1; r > 0; --r) {
         SDL_memcpy(g->bricks[r], g->bricks[r - 1], sizeof(g->bricks[r]));
         SDL_memcpy(g->bonus_bricks[r], g->bonus_bricks[r - 1], sizeof(g->bonus_bricks[r]));
+        SDL_memcpy(g->strong_hits[r], g->strong_hits[r - 1], sizeof(g->strong_hits[r]));
+        SDL_memcpy(g->brick_hit_time[r], g->brick_hit_time[r - 1], sizeof(g->brick_hit_time[r]));
         g->row_age[r] = g->row_age[r - 1];
         g->row_color[r] = g->row_color[r - 1];
     }
     for (int c = 0; c < COLS; ++c) {
         g->bricks[0][c] = true;
         g->bonus_bricks[0][c] = false;
+        g->strong_hits[0][c] = 0;
+        g->brick_hit_time[0][c] = -100;
     }
     g->row_age[0] = 0;
     g->row_color[0] = generated_row_color(g->level, g->generated_rows++);
-    int bonus_count = (g->bonus_credit + COLS) / BONUS_BRICK_INTERVAL;
-    g->bonus_credit = (g->bonus_credit + COLS) % BONUS_BRICK_INTERVAL;
+    int bonus_count = (g->bonus_credit + COLS) / split_interval(g->level);
+    g->bonus_credit = (g->bonus_credit + COLS) % split_interval(g->level);
+    int hard_interval = strong_interval(g->level);
+    int strong_count = hard_interval ? (g->strong_credit + COLS) / hard_interval : 0;
+    g->strong_credit = hard_interval ? (g->strong_credit + COLS) % hard_interval : 0;
     int cells[COLS];
     for (int c = 0; c < COLS; ++c) cells[c] = c;
-    for (int i = 0; i < bonus_count; ++i) {
-        int chosen = i + (int)(random_unit(g) * (COLS - i));
-        int cell = cells[chosen]; cells[chosen] = cells[i]; cells[i] = cell;
-        g->bonus_bricks[0][cell] = true;
-    }
+    place_specials(g, cells, COLS, bonus_count, strong_count);
     g->remaining += COLS;
 }
 
@@ -552,17 +591,26 @@ static void update_ball(Game *g, Ball *b, float dt) {
             float ny = clamp(b->y, rect.y, rect.y + rect.h);
             float dx = b->x - nx, dy = b->y - ny;
             if (dx * dx + dy * dy > RADIUS * RADIUS) continue;
-            g->bricks[r][c] = false;
-            if (g->bonus_bricks[r][c]) {
-                g->bonus_bricks[r][c] = false;
-                free_bonus_balls(g, b, r, c);
+            bool was_strong = g->strong_hits[r][c] > 0;
+            bool destroyed = true;
+            if (was_strong) {
+                g->brick_hit_time[r][c] = g->animation_time;
+                destroyed = --g->strong_hits[r][c] == 0;
             }
-            g->score += 100;
-            ++g->destroyed;
-            g->level = 1 + (int)(g->destroyed / 100);
-            --g->remaining;
-            if (b->shot_power > 0) shatter(g, b, r, c);
-            if (b->pierces > 0) {
+            if (destroyed) {
+                g->bricks[r][c] = false;
+                if (g->bonus_bricks[r][c]) {
+                    g->bonus_bricks[r][c] = false;
+                    free_bonus_balls(g, b, r, c);
+                }
+                g->score += 100;
+                ++g->destroyed;
+                g->level = 1 + (int)(g->destroyed / 100);
+                --g->remaining;
+                if (b->shot_power > 0) shatter(g, b, r, c);
+            }
+            /* Strong bricks always reflect, even on a full-charge hit. */
+            if (!was_strong && b->pierces > 0) {
                 start_spin(b, -b->vx, -b->vy);
                 --b->pierces;
                 continue;
@@ -826,7 +874,9 @@ static void render(SDL_Renderer *r, const Game *g) {
             for (int col = 0; col < COLS; ++col) {
                 if (!g->bricks[row][col]) continue;
                 SDL_FRect rect = brick_rect(g, row, col);
-                SDL_SetRenderDrawColor(r, red, green, blue, alpha);
+                SDL_Color tint = g->strong_hits[row][col] > 0 ? strong_brick_color(g, row, col) :
+                    (SDL_Color){red, green, blue, 255};
+                SDL_SetRenderDrawColor(r, tint.r, tint.g, tint.b, alpha);
                 SDL_RenderFillRect(r, &rect);
                 if (g->bonus_bricks[row][col]) {
                     SDL_SetRenderDrawColor(r, 255, 235, 130, alpha);
